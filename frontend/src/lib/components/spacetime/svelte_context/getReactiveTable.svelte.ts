@@ -1,5 +1,5 @@
 import { onMount, onDestroy } from 'svelte';
-import { useSpacetimeDB } from './useSpacetimeDB.svelte.js';
+import { getSpacetimeContext } from '../SpacetimeContext.svelte';
 import type { DbConnectionImpl } from 'spacetimedb';
 
 // Re-export query building utilities from React implementation
@@ -107,7 +107,261 @@ type Snapshot<RowType> = {
   readonly state: 'loading' | 'ready';
 };
 
+/**
+ * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
+ * This class encapsulates table subscription logic and maintains reactive state using $state().
+ */
+export class ReactiveTable<T> {
+  rows: T[] | undefined = $state();
+  state: 'loading' | 'ready' = $state('loading');
+  
+  private client: any;
+  private tableName: string;
+  private whereClause?: Expr<keyof T & string>;
+  private callbacks?: UseQueryCallbacks<T>;
+  private subscription: any = undefined;
+  private eventListeners: (() => void)[] = [];
+  private latestTransactionEvent: any = $state(null);
+
+  constructor(
+    tableName: string,
+    whereClause?: Expr<keyof T & string>,
+    callbacks?: UseQueryCallbacks<T>
+  ) {
+    this.tableName = tableName;
+    this.whereClause = whereClause;
+    this.callbacks = callbacks;
+
+    // Get SpacetimeDB client
+    try {
+      this.client = getSpacetimeContext().connection!;
+    } catch {
+      throw new Error(
+        'Could not find SpacetimeDB client! Did you forget to add a ' +
+          'SpacetimeDBProvider? ReactiveTable must be used in the Svelte component tree ' +
+          'under a SpacetimeDBProvider component.'
+      );
+    }
+
+    this.initialize();
+  }
+
+  private initialize() {
+    // Set up connection state listeners
+    const onConnect = () => {
+      this.setupSubscription();
+    };
+    const onDisconnect = () => {
+      this.state = 'loading';
+    };
+    const onConnectError = () => {
+      this.state = 'loading';
+    };
+
+    // Add event listeners if the client supports them
+    const clientWithEvents = this.client as any;
+    if (clientWithEvents.on && typeof clientWithEvents.on === 'function') {
+      clientWithEvents.on('connect', onConnect);
+      clientWithEvents.on('disconnect', onDisconnect);
+      clientWithEvents.on('connectError', onConnectError);
+      
+      this.eventListeners.push(() => {
+        clientWithEvents.off('connect', onConnect);
+        clientWithEvents.off('disconnect', onDisconnect);
+        clientWithEvents.off('connectError', onConnectError);
+      });
+    }
+
+    // Initial setup
+    this.setupSubscription();
+    this.setupTableEventListeners();
+    this.updateRows();
+  }
+
+  private setupSubscription() {
+    // Clean up previous subscription
+    if (this.subscription) {
+      this.subscription.unsubscribe();
+    }
+
+    const query = `SELECT * FROM ${this.tableName}` +
+      (this.whereClause ? ` WHERE ${toString(this.whereClause)}` : '');
+
+    if ('subscriptionBuilder' in this.client && typeof this.client.subscriptionBuilder === 'function') {
+      this.subscription = this.client
+        .subscriptionBuilder()
+        .onApplied(() => {
+          this.state = 'ready';
+          this.updateRows();
+        })
+        .subscribe(query);
+    }
+  }
+
+  private setupTableEventListeners() {
+    const table = this.client.db[this.tableName] as any;
+    
+    if (table && 'onInsert' in table) {
+      const onInsert = (ctx: any, row: T) => {
+        // Filter by where clause if provided
+        if (this.whereClause && !evaluate(this.whereClause, row)) {
+          return;
+        }
+        
+        // Call user callback
+        this.callbacks?.onInsert?.(row);
+        
+        // Update reactive state
+        this.updateRows();
+        this.latestTransactionEvent = ctx.event;
+      };
+
+      const onDelete = (ctx: any, row: T) => {
+        // Filter by where clause if provided
+        if (this.whereClause && !evaluate(this.whereClause, row)) {
+          return;
+        }
+        
+        // Call user callback
+        this.callbacks?.onDelete?.(row);
+        
+        // Update reactive state
+        this.updateRows();
+        this.latestTransactionEvent = ctx.event;
+      };
+
+      const onUpdate = (ctx: any, oldRow: T, newRow: T) => {
+        // Determine membership changes based on where clause
+        const change = classifyMembership(this.whereClause, oldRow, newRow);
+        
+        if (change === 'enter') {
+          this.callbacks?.onInsert?.(newRow);
+        } else if (change === 'leave') {
+          this.callbacks?.onDelete?.(oldRow);
+        } else if (change === 'stayIn') {
+          this.callbacks?.onUpdate?.(oldRow, newRow);
+        }
+        // 'stayOut' requires no action
+
+        if (change !== 'stayOut') {
+          this.updateRows();
+          this.latestTransactionEvent = ctx.event;
+        }
+      };
+
+      table.onInsert(onInsert);
+      table.onDelete(onDelete);
+      if ('onUpdate' in table) {
+        table.onUpdate(onUpdate);
+      }
+
+      // Store cleanup functions
+      this.eventListeners.push(() => {
+        if ('removeOnInsert' in table) {
+          table.removeOnInsert(onInsert);
+          table.removeOnDelete(onDelete);
+          if ('removeOnUpdate' in table) {
+            table.removeOnUpdate(onUpdate);
+          }
+        }
+      });
+    }
+  }
+
+  private updateRows() {
+    const table = this.client.db[this.tableName] as any;
+    if (table && 'iter' in table) {
+      const allRows = table.iter() as T[];
+      this.rows = this.whereClause
+        ? allRows.filter(row => evaluate(this.whereClause!, row))
+        : allRows;
+    }
+  }
+
+  /**
+   * Clean up all subscriptions and event listeners.
+   * Call this when the component is destroyed or when you no longer need the reactive table.
+   */
+  destroy() {
+    if (this.subscription) {
+      this.subscription.unsubscribe();
+    }
+    
+    // Clean up all event listeners
+    this.eventListeners.forEach(cleanup => cleanup());
+    this.eventListeners = [];
+  }
+
+  /**
+   * Update the where clause and refilter the data.
+   * This allows dynamic filtering of the reactive table.
+   */
+  setWhereClause(whereClause?: Expr<keyof T & string>) {
+    this.whereClause = whereClause;
+    this.setupSubscription();
+    this.updateRows();
+  }
+}
+
 type MembershipChange = 'enter' | 'leave' | 'stayIn' | 'stayOut';
+
+/**
+ * Factory function to create a ReactiveTable instance.
+ * This provides a convenient way to create reactive tables with proper TypeScript typing.
+ * 
+ * @example
+ * ```svelte
+ * <script>
+ *   import { createReactiveTable, eq, where } from './getReactiveTable.js';
+ *   import type { Message } from '../module_bindings';
+ *   
+ *   // Create reactive table with where clause
+ *   const messageTable = createReactiveTable<Message>('message', where(eq('chatId', 123)), {
+ *     onInsert: (row) => console.log('New message:', row),
+ *     onUpdate: (oldRow, newRow) => console.log('Updated message:', oldRow, newRow),
+ *     onDelete: (row) => console.log('Deleted message:', row)
+ *   });
+ *   
+ *   // Access reactive data
+ *   $: console.log('Messages:', messageTable.rows);
+ *   $: console.log('State:', messageTable.state);
+ * </script>
+ * ```
+ */
+export function createReactiveTable<T>(
+  tableName: string,
+  whereClause: Expr<keyof T & string>,
+  callbacks?: UseQueryCallbacks<T>
+): ReactiveTable<T>;
+
+export function createReactiveTable<T>(
+  tableName: string,
+  callbacks?: UseQueryCallbacks<T>
+): ReactiveTable<T>;
+
+export function createReactiveTable<T>(
+  tableName: string,
+  whereClauseOrCallbacks?: Expr<keyof T & string> | UseQueryCallbacks<T>,
+  callbacks?: UseQueryCallbacks<T>
+): ReactiveTable<T> {
+  let whereClause: Expr<keyof T & string> | undefined;
+  
+  if (whereClauseOrCallbacks) {
+    if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
+      whereClause = whereClauseOrCallbacks as Expr<keyof T & string>;
+    } else {
+      callbacks = whereClauseOrCallbacks as UseQueryCallbacks<T>;
+    }
+  }
+
+  return new ReactiveTable<T>(tableName, whereClause, callbacks);
+}
+
+/**
+ * Compatibility function for the original getReactiveTable API.
+ * This maintains backward compatibility while providing the same functionality.
+ * For new code, consider using createReactiveTable which returns a ReactiveTable instance.
+ */
 
 function classifyMembership<
   Col extends string,
@@ -149,13 +403,13 @@ type ColumnsFromRow<R> = {
  * @example
  * ```svelte
  * <script>
- *   import { useTable, where, eq } from './useTable.js';
+ *   import { getReactiveTable, where, eq } from './getReactiveTable.js';
  *   import type { Entity } from '../module_bindings';
  *   
  *   let gameId = $state(123);
  *   
  *   // CORRECT - specify types explicitly for proper typing
- *   const snapshot = useTable<DbConnection, Entity>('entity', () => where(eq('gameId', gameId)), {
+ *   const snapshot = getReactiveTable<DbConnection, Entity>('entity', () => where(eq('gameId', gameId)), {
  *     onInsert: (row) => console.log('Inserted entity:', row), // row is properly typed as Entity
  *     onDelete: (row) => console.log('Deleted entity:', row),   // row is properly typed as Entity
  *     onUpdate: (oldRow, newRow) => console.log('Updated:', oldRow, newRow), // both properly typed as Entity
@@ -166,7 +420,7 @@ type ColumnsFromRow<R> = {
  * </script>
  * ```
  */
-export function useTable<
+export function getReactiveTable<
   DbConnection extends DbConnectionImpl,
   RowType, // Remove the extends constraint to allow proper typing
   TableName extends keyof DbConnection['db'] & string = keyof DbConnection['db'] & string,
@@ -176,7 +430,7 @@ export function useTable<
   callbacks?: UseQueryCallbacks<RowType>
 ): Snapshot<RowType>;
 
-export function useTable<
+export function getReactiveTable<
   DbConnection extends DbConnectionImpl,
   RowType, // Remove the extends constraint to allow proper typing
   TableName extends keyof DbConnection['db'] & string = keyof DbConnection['db'] & string,
@@ -185,7 +439,7 @@ export function useTable<
   callbacks?: UseQueryCallbacks<RowType>
 ): Snapshot<RowType>;
 
-export function useTable<
+export function getReactiveTable<
   DbConnection extends DbConnectionImpl,
   RowType, // Remove the extends constraint to allow proper typing
   TableName extends keyof DbConnection['db'] & string = keyof DbConnection['db'] & string,
@@ -212,11 +466,11 @@ export function useTable<
 
   let client: DbConnection;
   try {
-    client = useSpacetimeDB<DbConnection>();
+    client = getSpacetimeContext<DbConnection>().connection!;
   } catch {
     throw new Error(
       'Could not find SpacetimeDB client! Did you forget to add a ' +
-        '`SpacetimeDBProvider`? `useTable` must be used in the Svelte component tree ' +
+        '`SpacetimeDBProvider`? `getReactiveTable` must be used in the Svelte component tree ' +
         'under a `SpacetimeDBProvider` component.'
     );
   }

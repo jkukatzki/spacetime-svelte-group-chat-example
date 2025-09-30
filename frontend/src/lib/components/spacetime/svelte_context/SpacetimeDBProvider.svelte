@@ -1,7 +1,7 @@
 <script lang="ts">
   import { setContext, onMount, onDestroy, type Snippet } from 'svelte';
   import type { DbConnectionBuilder, DbConnectionImpl } from 'spacetimedb';
-  import { SPACETIMEDB_CONTEXT_KEY, type SpacetimeDBContext } from './useSpacetimeDB.svelte';
+	import { SPACETIMEDB_CONTEXT_KEY, SpacetimeDBContext } from '../SpacetimeContext.svelte';
   
   interface Props<
     DbConnection extends DbConnectionImpl,
@@ -21,60 +21,50 @@
     children
   }: Props<any, any, any> = $props();
 
-  let connection: DbConnectionImpl | undefined = $state(undefined);
-  let connected = $state(false);
-  let error: Error | undefined = $state(undefined);
-
-  // Create context value following the useThrelte pattern
-  const contextValue: SpacetimeDBContext = {
-    getConnection: () => connection,
-    connected: {
-      get current() { return connected; }
-    },
-    error: {
-      get current() { return error; }
-    }
-  };
+  const spacetimeContext: SpacetimeDBContext = new SpacetimeDBContext(
+    undefined,
+    undefined,
+  );
 
   // Set the context for child components IMMEDIATELY (not in onMount)
-  setContext(SPACETIMEDB_CONTEXT_KEY, contextValue);
+  setContext(SPACETIMEDB_CONTEXT_KEY, spacetimeContext);
 
   onMount(() => {
     try {
       // Build the connection when component mounts
-      connection = connectionBuilder.build();
+      spacetimeContext.connection = connectionBuilder.build();
       
       // Set up connection event handlers if available
-      const clientWithEvents = connection as any;
+      const clientWithEvents = spacetimeContext.connection as any;
       if (clientWithEvents.onConnect) {
         clientWithEvents.onConnect(() => {
-          connected = true;
-          error = undefined;
+          spacetimeContext.connected = true;
+          spacetimeContext.error = undefined;
         });
       }
       
       if (clientWithEvents.onDisconnect) {
         clientWithEvents.onDisconnect(() => {
-          connected = false;
+          spacetimeContext.connected = false;
         });
       }
       
       if (clientWithEvents.onConnectError) {
         clientWithEvents.onConnectError((err: Error) => {
-          connected = false;
-          error = err;
+          spacetimeContext.connected = false;
+          spacetimeContext.error = err;
         });
       }
     } catch (err) {
-      error = err as Error;
+      spacetimeContext.error = err as Error;
       console.error('Failed to create SpacetimeDB connection:', err);
     }
   });
 
   onDestroy(() => {
     // Connection will clean itself up automatically when component is destroyed
-    connected = false;
-    connection = undefined;
+    spacetimeContext.connected = false;
+    spacetimeContext.connection = undefined;
   });
 </script>
 
