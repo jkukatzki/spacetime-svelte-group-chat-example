@@ -1,0 +1,1 @@
+cd target/wasm32-unknown-unknown/release/ && spacetime publish --delete-data -s local --bin-path spacetime_module.wasm groupchat
