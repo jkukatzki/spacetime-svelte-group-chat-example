@@ -132,9 +132,17 @@ export class ReactiveTable<T> {
     this.whereClause = whereClause;
     this.callbacks = callbacks;
 
-    // Get SpacetimeDB client
+    // Get SpacetimeDB client from context internally
     try {
-      this.client = getSpacetimeContext().connection!;
+      const context = getSpacetimeContext();
+      this.client = context.connection;
+      
+      if (!this.client) {
+        console.log('ReactiveTable: Connection not available yet for table:', this.tableName);
+        // Set up a watcher for when connection becomes available
+        this.setupConnectionWatcher(context);
+        return;
+      }
     } catch {
       throw new Error(
         'Could not find SpacetimeDB client! Did you forget to add a ' +
@@ -146,7 +154,23 @@ export class ReactiveTable<T> {
     this.initialize();
   }
 
+  private setupConnectionWatcher(context: any) {
+    // Use Svelte's $effect to watch for connection changes
+    $effect(() => {
+      if (context.connection) {
+        this.client = context.connection;
+        this.initialize();
+      }
+    });
+  }
+
   private initialize() {
+    // Don't initialize if client isn't ready yet
+    if (!this.client) {
+      console.log('ReactiveTable: Client not ready for table:', this.tableName);
+      return;
+    }
+
     // Set up connection state listeners
     const onConnect = () => {
       this.setupSubscription();
@@ -160,7 +184,7 @@ export class ReactiveTable<T> {
 
     // Add event listeners if the client supports them
     const clientWithEvents = this.client as any;
-    if (clientWithEvents.on && typeof clientWithEvents.on === 'function') {
+    if (clientWithEvents && clientWithEvents.on && typeof clientWithEvents.on === 'function') {
       clientWithEvents.on('connect', onConnect);
       clientWithEvents.on('disconnect', onDisconnect);
       clientWithEvents.on('connectError', onConnectError);
@@ -179,6 +203,12 @@ export class ReactiveTable<T> {
   }
 
   private setupSubscription() {
+    // Don't set up subscription if client isn't ready
+    if (!this.client) {
+      console.log('ReactiveTable: No client available for subscription setup:', this.tableName);
+      return;
+    }
+
     // Clean up previous subscription
     if (this.subscription) {
       this.subscription.unsubscribe();
@@ -199,6 +229,11 @@ export class ReactiveTable<T> {
   }
 
   private setupTableEventListeners() {
+    if (!this.client || !this.client.db) {
+      console.log('ReactiveTable: No client or db available for event listeners:', this.tableName);
+      return;
+    }
+
     const table = this.client.db[this.tableName] as any;
     
     if (table && 'onInsert' in table) {
@@ -269,12 +304,20 @@ export class ReactiveTable<T> {
   }
 
   private updateRows() {
+    if (!this.client || !this.client.db) {
+      console.log('ReactiveTable: No client or db available for updating rows:', this.tableName);
+      return;
+    }
+
     const table = this.client.db[this.tableName] as any;
     if (table && 'iter' in table) {
       const allRows = table.iter() as T[];
       this.rows = this.whereClause
         ? allRows.filter(row => evaluate(this.whereClause!, row))
         : allRows;
+    } else {
+      // Table exists but has no data or iter method - set to empty array
+      this.rows = [];
     }
   }
 
@@ -328,16 +371,6 @@ type MembershipChange = 'enter' | 'leave' | 'stayIn' | 'stayOut';
  * </script>
  * ```
  */
-export function createReactiveTable<T>(
-  tableName: string,
-  whereClause: Expr<keyof T & string>,
-  callbacks?: UseQueryCallbacks<T>
-): ReactiveTable<T>;
-
-export function createReactiveTable<T>(
-  tableName: string,
-  callbacks?: UseQueryCallbacks<T>
-): ReactiveTable<T>;
 
 export function createReactiveTable<T>(
   tableName: string,
@@ -345,16 +378,21 @@ export function createReactiveTable<T>(
   callbacks?: UseQueryCallbacks<T>
 ): ReactiveTable<T> {
   let whereClause: Expr<keyof T & string> | undefined;
+  let actualCallbacks: UseQueryCallbacks<T> | undefined;
   
+  // Handle different parameter combinations
   if (whereClauseOrCallbacks) {
     if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
+      // First param is where clause
       whereClause = whereClauseOrCallbacks as Expr<keyof T & string>;
+      actualCallbacks = callbacks;
     } else {
-      callbacks = whereClauseOrCallbacks as UseQueryCallbacks<T>;
+      // First param is callbacks
+      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<T>;
     }
   }
 
-  return new ReactiveTable<T>(tableName, whereClause, callbacks);
+  return new ReactiveTable<T>(tableName, whereClause, actualCallbacks);
 }
 
 /**

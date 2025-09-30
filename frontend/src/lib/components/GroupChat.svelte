@@ -1,36 +1,42 @@
 <script lang="ts">
 	import { Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
-	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
+	import { createReactiveTable, eq, where, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
 	import { DbConnection, GroupChat, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { onDestroy } from "svelte";
 
-    let groupChatsTable: ReactiveTable<GroupChat> | undefined = $state();
-    let messagesTable: ReactiveTable<Message> | undefined = $state();
     let spacetimeContext = getSpacetimeContext<DbConnection>();
-    let users = $state();
-    
-    $effect(() => {
-        if (spacetimeContext.connection) {
-            // Create reactive tables with proper event handling
-            messagesTable = createReactiveTable<Message>('message', {
-                onInsert: (message) => console.log('New message received:', message.text),
-                onUpdate: (oldMessage, newMessage) => console.log('Message updated:', newMessage.text),
-                onDelete: (message) => console.log('Message deleted:', message.text)
-            });
-            
-            groupChatsTable = createReactiveTable<GroupChat>('groupchat', {
-                onInsert: (chat) => console.log('New group chat created:', chat.id),
-                onDelete: (chat) => console.log('Group chat deleted:', chat.id)
-            });
-        }
+
+    // Create reactive tables declaratively - they automatically get context and connect when ready
+    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat', {
+        onInsert: (chat) => console.log('New group chat created:', chat.id),
+        onDelete: (chat) => console.log('Group chat deleted:', chat.id)
     });
 
+    let messagesTable: ReactiveTable<Message> = createReactiveTable<Message>('message', {
+        onInsert: (message) => console.log('New message received:', message.text),
+        onUpdate: (oldMessage, newMessage) => console.log('Message updated:', newMessage.text),
+        onDelete: (message) => console.log('Message deleted:', message.text)
+    });
+
+    let usersTable: ReactiveTable<User> = createReactiveTable<User>('user', {
+        onInsert: (user) => console.log('New user joined:', user.name),
+        onDelete: (user) => console.log('User left:', user.name)
+    });
+
+    // Simple connection ready state derived from any table being ready
+    let connectionReady = $derived(
+        groupChatsTable.state === 'ready' || 
+        messagesTable.state === 'ready' || 
+        usersTable.state === 'ready'
+    );
+    
     // Clean up reactive tables when component is destroyed
     onDestroy(() => {
-        messagesTable?.destroy();
-        groupChatsTable?.destroy();
+        groupChatsTable.destroy();
+        messagesTable.destroy();
+        usersTable.destroy();
     });
 
     let createGroupChatModalOpen = $state(false);
@@ -55,35 +61,53 @@
 
 {#if spacetimeContext.connection}
     <Container>
+        <!-- Connection Status Bar -->
+        <div class="connection-status {connectionReady ? 'ready' : 'connecting'}">
+            {#if connectionReady}
+                🟢 Connected to SpacetimeDB
+            {:else}
+                🟡 Connecting to SpacetimeDB...
+            {/if}
+        </div>
+        
         <Row>
             <Col xs="3">
-                <Button onclick={() => createGroupChatModalOpen = true}>New Chat</Button>
-                <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
-                    <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
-                    <Button onclick={() => {
-                        if (spacetimeContext.connection && createGroupChatName.trim() !== "") {
-                            spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
-                            createGroupChatName = "";
-                            createGroupChatModalOpen = false;
-                        }
-                    }}>Create</Button>
-                </Modal>
-                {#if groupChatsTable?.rows}
+                <!-- GROUP CHATS -->
+                
+                {#if connectionReady && groupChatsTable.rows !== undefined}
+                    <Row>
+                        
+                    </Row>
+                    <Button onclick={() => createGroupChatModalOpen = true} disabled={!connectionReady}>New Chat</Button>
+                    <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
+                        <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
+                        <Button onclick={() => {
+                            if (spacetimeContext.connection && createGroupChatName.trim() !== "" && connectionReady) {
+                                spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
+                                createGroupChatName = "";
+                                createGroupChatModalOpen = false;
+                            }
+                        }}>Create</Button>
+                    </Modal>
                     {#each groupChatsTable.rows as chat}
-                        <Button onclick={() => spacetimeContext.connection?.reducers.joinGroupchat(chat.id)}>{chat.id}</Button>
+                        <Row class="my-2">
+                            <Button onclick={() => spacetimeContext.connection?.reducers.joinGroupchat(chat.id)}>
+                                {chat.id}
+                            </Button>
+                        </Row>
+                        
                     {/each}
                 {:else}
-                    <Input type="select" disabled>
-                        <option>Loading group chats...</option>
-                    </Input>
+                    <h3>{connectionReady ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
                 {/if}
             </Col>
+            <!-- MESSAGES -->
             <Col xs="6">
                 <div class="chat-header">
-                    <h5>Messages ({messagesTable?.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
-                    <small>Total: {messagesTable?.rows?.length ?? 0} messages</small>
+                    <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
+                    <small>Total: {messagesTable.rows?.length ?? 0} messages</small>
                 </div>
-                {#if messagesTable?.rows}
+                {#if messagesTable.rows !== undefined}
                     {#each messagesTable.rows as message}
                         <Card class="mb-2">
                             <CardHeader>{message.sender}:</CardHeader>
@@ -100,29 +124,9 @@
     </Container>
 
     <InputGroup class="fixed-bottom w-50 mx-auto">
-        <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} />
-        <Button onclick={sendMessage}>Send</Button>
+        <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!connectionReady} />
+        <Button onclick={sendMessage} disabled={!connectionReady}>Send</Button>
     </InputGroup>
 {:else}
     <p>Connecting to SpacetimeDB...</p>
 {/if}
-
-<style>
-    .chat-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1rem;
-        padding: 0.5rem;
-        background-color: #f8f9fa;
-        border-radius: 0.25rem;
-    }
-    
-    .chat-header h5 {
-        margin: 0;
-    }
-    
-    .chat-header small {
-        color: #6c757d;
-    }
-</style>
