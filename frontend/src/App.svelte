@@ -12,7 +12,7 @@
 
     
 
-    const appContext = new AppContext();
+    const appContext = new AppContext(createReactiveTable<User>('user'));
 
     setContext('AppContext', appContext);
 

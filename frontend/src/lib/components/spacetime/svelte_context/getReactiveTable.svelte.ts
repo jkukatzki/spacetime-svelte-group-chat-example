@@ -1,7 +1,7 @@
-import { onMount, onDestroy } from 'svelte';
+import { onMount, onDestroy, untrack } from 'svelte';
 import { getSpacetimeContext, SpacetimeDBContext } from '../SpacetimeContext.svelte';
 import type { DbConnectionImpl } from 'spacetimedb';
-import { evaluate, toString as toQueryString, type Expr, type Value } from './QueryFormatting';
+import { evaluate, toQueryString, type Expr, type Value } from './QueryFormatting';
 
 // Re-export query building utilities from React implementation
 export interface UseQueryCallbacks<RowType> {
@@ -65,7 +65,10 @@ export class ReactiveTable<T> {
     // Use Svelte's $effect to watch for connection changes
     $effect(() => {
       if (context.connection) {
-        this.initialize(context);
+        // Use untrack to prevent reactive updates in initialize from causing loops
+        untrack(() => {
+          this.initialize(context);
+        });
       }
     });
   }
@@ -79,13 +82,19 @@ export class ReactiveTable<T> {
 
     // Set up connection state listeners
     const onConnect = () => {
-      this.setupSubscription(context);
+      untrack(() => {
+        this.setupSubscription(context);
+      });
     };
     const onDisconnect = () => {
-      this.state = 'loading';
+      untrack(() => {
+        this.state = 'loading';
+      });
     };
     const onConnectError = () => {
-      this.state = 'loading';
+      untrack(() => {
+        this.state = 'loading';
+      });
     };
 
     // Add event listeners if the client supports them
@@ -122,7 +131,7 @@ export class ReactiveTable<T> {
 
     const query = `SELECT * FROM ${this.tableName}` +
       (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
-
+    console.log('QUERY', query);
     if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
       this.subscription = context.connection
         .subscriptionBuilder()
@@ -222,6 +231,12 @@ export class ReactiveTable<T> {
       // Table exists but has no data or iter method - set to empty array
       this.rows = [];
     }
+    
+    // Set state to ready after successfully updating rows
+    untrack(() => {
+      this.state = 'ready';
+      console.log('ReactiveTable: State set to ready for table:', this.tableName);
+    });
   }
 
   /**
@@ -434,7 +449,9 @@ export function getReactiveTable<
         currentSubscription = (client as any)
           .subscriptionBuilder()
           .onApplied(() => {
-            subscribeApplied = true;
+            untrack(() => {
+              subscribeApplied = true;
+            });
           })
           .subscribe(currentQuery);
       }
@@ -452,9 +469,11 @@ export function getReactiveTable<
         }
         callbacks?.onInsert?.(row);
         if (ctx.event !== latestTransactionEvent || !latestTransactionEvent) {
-          latestTransactionEvent = ctx.event;
-          // Trigger reactivity by updating a reactive value
-          latestTransactionEvent = ctx.event;
+          untrack(() => {
+            latestTransactionEvent = ctx.event;
+            // Trigger reactivity by updating a reactive value
+            latestTransactionEvent = ctx.event;
+          });
         }
       };
 
@@ -466,7 +485,9 @@ export function getReactiveTable<
         }
         callbacks?.onDelete?.(row);
         if (ctx.event !== latestTransactionEvent || !latestTransactionEvent) {
-          latestTransactionEvent = ctx.event;
+          untrack(() => {
+            latestTransactionEvent = ctx.event;
+          });
         }
       };
 
@@ -485,7 +506,9 @@ export function getReactiveTable<
         // 'stayOut' requires no action
 
         if (change !== 'stayOut' && (ctx.event !== latestTransactionEvent || !latestTransactionEvent)) {
-          latestTransactionEvent = ctx.event;
+          untrack(() => {
+            latestTransactionEvent = ctx.event;
+          });
         }
       };
 

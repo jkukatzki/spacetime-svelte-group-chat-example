@@ -91,7 +91,7 @@
                 {#if messagesTable}
                     <div class="chat-header">
                         <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
-                        <small>Total: {messagesTable.rows?.length ?? 0} messages</small>
+                        <small>Total: {messagesTable.rows?.length ?? '/'} messages</small>
                     </div>
                     {#if messagesTable.rows !== undefined}
                         {#each messagesTable.rows as message}
@@ -115,6 +115,12 @@
                         <CardBody>Groupchat: {appContext.clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
+                {#each appContext.users.rows ?? [] as user}
+                    <Card class="my-2">
+                        <CardHeader>{user.name ? user.name : user.identity.toHexString()}</CardHeader>
+                        <CardBody>In Groupchat: {user.groupchatId}</CardBody>
+                    </Card>
+                {/each}
             </Col>
         </Row>
     </Container>

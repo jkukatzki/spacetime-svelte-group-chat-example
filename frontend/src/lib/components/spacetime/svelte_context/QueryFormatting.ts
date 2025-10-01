@@ -66,9 +66,16 @@ function formatValue(v: Value): string {
   }
 }
 
+// Convert camelCase to snake_case for database field names
+function camelToSnakeCase(str: string): string {
+  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
 function escapeIdent(id: string): string {
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)) return id;
-  return `"${id.replace(/"/g, '""')}"`;
+  // Convert camelCase to snake_case for database compatibility
+  const snakeCaseId = camelToSnakeCase(id);
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(snakeCaseId)) return snakeCaseId;
+  return `"${snakeCaseId.replace(/"/g, '""')}"`;
 }
 
 function parenthesize(s: string): string {
@@ -76,7 +83,7 @@ function parenthesize(s: string): string {
   return `(${s})`;
 }
 
-export function toString<Column extends string>(expr: Expr<Column>): string {
+export function toQueryString<Column extends string>(expr: Expr<Column>): string {
   switch (expr.type) {
     case 'eq':
       return `${escapeIdent(expr.key)} = ${formatValue(expr.value)}`;
