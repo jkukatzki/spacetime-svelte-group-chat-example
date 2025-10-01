@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
-	import { createReactiveTable, eq, where, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
+	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
 	import { DbConnection, GroupChat, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { onDestroy } from "svelte";

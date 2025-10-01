@@ -5,7 +5,7 @@
 	import { Styles } from "@sveltestrap/sveltestrap";
 
     const connectionBuilder = DbConnection.builder()
-        .withUri('ws://localhost:3000')
+        .withUri('ws://192.168.178.103:3000')
         .withModuleName('groupchat');
 </script>
 
