@@ -4,32 +4,19 @@
 	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
 	import { DbConnection, GroupChat, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
-	import { onDestroy } from "svelte";
+	import { getContext, onDestroy } from "svelte";
 	import { eq, where } from "./spacetime/svelte_context/QueryFormatting";
+	import type { AppContext } from "$lib/AppContext.svelte";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
-
-    let clientUser: User | null = $state(null);
     let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat');
     let messagesTable: ReactiveTable<Message> | null = $state(null);
 
-    let usersTable: ReactiveTable<User> = createReactiveTable<User>('user', {
-        onInsert: (user) => {
-            if (spacetimeContext.connection?.identity && user.identity.isEqual(spacetimeContext.connection.identity)) {
-                clientUser = user;
-            }
-        },
-        onUpdate: (oldUser, newUser) => { 
-            if (spacetimeContext.connection?.identity && newUser.identity.isEqual(spacetimeContext.connection.identity)) {
-                clientUser = newUser;
-            }
-        }
-    },
-    );
+    const appContext: AppContext = getContext('AppContext');
 
     $effect(() => {
-        if (clientUser?.groupchatId) {
-            messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', clientUser.groupchatId)));
+        if (appContext.clientUser?.groupchatId) {
+            messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
         }
     })
     
@@ -37,7 +24,6 @@
     onDestroy(() => {
         groupChatsTable.destroy();
         messagesTable?.destroy();
-        usersTable.destroy();
     });
 
     let createGroupChatModalOpen = $state(false);
@@ -123,21 +109,12 @@
             </Col>
             <!-- USERS -->
             <Col xs="3">
-                {#if clientUser}
+                {#if appContext.clientUser}
                     <Card>
-                        <CardHeader>{clientUser.name ? clientUser.name : clientUser.identity.toHexString()}</CardHeader>
-                        <CardBody>Groupchat: {clientUser.groupchatId}</CardBody>
+                        <CardHeader>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</CardHeader>
+                        <CardBody>Groupchat: {appContext.clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
-                {#each usersTable.rows ? usersTable.rows : [] as user}
-                    <Row class="my-2">
-                        <Card>
-                            <CardBody>
-                                {user.name} {user.identity === spacetimeContext.connection?.identity ? '(You)' : ''}
-                            </CardBody>
-                        </Card>
-                    </Row>
-                {/each}
             </Col>
         </Row>
     </Container>
