@@ -5,37 +5,38 @@
 	import { DbConnection, GroupChat, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { onDestroy } from "svelte";
+	import { eq, where } from "./spacetime/svelte_context/QueryFormatting";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
 
-    // Create reactive tables declaratively - they automatically get context and connect when ready
-    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat', {
-        onInsert: (chat) => console.log('New group chat created:', chat.id),
-        onDelete: (chat) => console.log('Group chat deleted:', chat.id)
-    });
-
-    let messagesTable: ReactiveTable<Message> = createReactiveTable<Message>('message', {
-        onInsert: (message) => console.log('New message received:', message.text),
-        onUpdate: (oldMessage, newMessage) => console.log('Message updated:', newMessage.text),
-        onDelete: (message) => console.log('Message deleted:', message.text)
-    });
+    let clientUser: User | null = $state(null);
+    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat');
+    let messagesTable: ReactiveTable<Message> | null = $state(null);
 
     let usersTable: ReactiveTable<User> = createReactiveTable<User>('user', {
-        onInsert: (user) => console.log('New user joined:', user.name),
-        onDelete: (user) => console.log('User left:', user.name)
-    });
-
-    // Simple connection ready state derived from any table being ready
-    let connectionReady = $derived(
-        groupChatsTable.state === 'ready' || 
-        messagesTable.state === 'ready' || 
-        usersTable.state === 'ready'
+        onInsert: (user) => {
+            if (spacetimeContext.connection?.identity && user.identity.isEqual(spacetimeContext.connection.identity)) {
+                clientUser = user;
+            }
+        },
+        onUpdate: (oldUser, newUser) => { 
+            if (spacetimeContext.connection?.identity && newUser.identity.isEqual(spacetimeContext.connection.identity)) {
+                clientUser = newUser;
+            }
+        }
+    },
     );
+
+    $effect(() => {
+        if (clientUser?.groupchatId) {
+            messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', clientUser.groupchatId)));
+        }
+    })
     
     // Clean up reactive tables when component is destroyed
     onDestroy(() => {
         groupChatsTable.destroy();
-        messagesTable.destroy();
+        messagesTable?.destroy();
         usersTable.destroy();
     });
 
@@ -62,27 +63,24 @@
 {#if spacetimeContext.connection}
     <Container>
         <!-- Connection Status Bar -->
-        <div class="connection-status {connectionReady ? 'ready' : 'connecting'}">
-            {#if connectionReady}
-                🟢 Connected to SpacetimeDB
+        <div class="connection-status {spacetimeContext.connected ? 'ready' : 'connecting'}">
+            {#if spacetimeContext.connected}
+                🟢 Connected to SpacetimeDB {spacetimeContext.connection.identity?.toHexString()}
             {:else}
                 🟡 Connecting to SpacetimeDB...
             {/if}
         </div>
         
-        <Row>
-            <Col xs="3">
+        <Row class="mt-4">
+            <Col xs="2">
                 <!-- GROUP CHATS -->
                 
-                {#if connectionReady && groupChatsTable.rows !== undefined}
-                    <Row>
-                        
-                    </Row>
-                    <Button onclick={() => createGroupChatModalOpen = true} disabled={!connectionReady}>New Chat</Button>
+                {#if spacetimeContext.connected && groupChatsTable.rows !== undefined}
+                    <Button onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>New Chat +</Button>
                     <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
                         <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
                         <Button onclick={() => {
-                            if (spacetimeContext.connection && createGroupChatName.trim() !== "" && connectionReady) {
+                            if (spacetimeContext.connection && createGroupChatName.trim() !== "" && spacetimeContext.connected) {
                                 spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
                                 createGroupChatName = "";
                                 createGroupChatModalOpen = false;
@@ -98,34 +96,55 @@
                         
                     {/each}
                 {:else}
-                    <h3>{connectionReady ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
+                    <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
                 {/if}
             </Col>
             <!-- MESSAGES -->
-            <Col xs="6">
-                <div class="chat-header">
-                    <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
-                    <small>Total: {messagesTable.rows?.length ?? 0} messages</small>
-                </div>
-                {#if messagesTable.rows !== undefined}
-                    {#each messagesTable.rows as message}
-                        <Card class="mb-2">
-                            <CardHeader>{message.sender}:</CardHeader>
-                            <CardBody>{message.text}</CardBody>
+             
+            <Col xs="7">
+                {#if messagesTable}
+                    <div class="chat-header">
+                        <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
+                        <small>Total: {messagesTable.rows?.length ?? 0} messages</small>
+                    </div>
+                    {#if messagesTable.rows !== undefined}
+                        {#each messagesTable.rows as message}
+                            <Card class="mb-2">
+                                <CardHeader>{message.sender}:</CardHeader>
+                                <CardBody>{message.text}</CardBody>
+                            </Card>
+                        {/each}
+                    {:else}
+                        <Card>
+                            <CardBody>Loading messages...</CardBody>
                         </Card>
-                    {/each}
-                {:else}
+                    {/if}
+                {/if}
+            </Col>
+            <!-- USERS -->
+            <Col xs="3">
+                {#if clientUser}
                     <Card>
-                        <CardBody>Loading messages...</CardBody>
+                        <CardHeader>{clientUser.name ? clientUser.name : clientUser.identity.toHexString()}</CardHeader>
+                        <CardBody>Groupchat: {clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
+                {#each usersTable.rows ? usersTable.rows : [] as user}
+                    <Row class="my-2">
+                        <Card>
+                            <CardBody>
+                                {user.name} {user.identity === spacetimeContext.connection?.identity ? '(You)' : ''}
+                            </CardBody>
+                        </Card>
+                    </Row>
+                {/each}
             </Col>
         </Row>
     </Container>
 
     <InputGroup class="fixed-bottom w-50 mx-auto">
-        <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!connectionReady} />
-        <Button onclick={sendMessage} disabled={!connectionReady}>Send</Button>
+        <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!spacetimeContext.connected} />
+        <Button onclick={sendMessage} disabled={!spacetimeContext.connected}>Send</Button>
     </InputGroup>
 {:else}
     <p>Connecting to SpacetimeDB...</p>
