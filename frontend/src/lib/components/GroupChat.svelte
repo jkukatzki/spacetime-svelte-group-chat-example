@@ -1,22 +1,29 @@
 <script lang="ts">
-	import { Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
+	import { Badge, Button, Card, CardBody, CardHeader, Col, colorMode, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
 	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
 	import { DbConnection, GroupChat, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { getContext, onDestroy } from "svelte";
-	import { eq, where } from "./spacetime/svelte_context/QueryFormatting";
+	import { eq, neq, and, where } from "./spacetime/svelte_context/QueryFormatting";
 	import type { AppContext } from "$lib/AppContext.svelte";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
     let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat');
     let messagesTable: ReactiveTable<Message> | null = $state(null);
+    let groupChatMembersTable: ReactiveTable<User> | null = $state(null);
 
     const appContext: AppContext = getContext('AppContext');
 
     $effect(() => {
-        if (appContext.clientUser?.groupchatId) {
+        if (appContext.clientUser?.groupchatId && spacetimeContext.connection?.identity) {
             messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
+            groupChatMembersTable = createReactiveTable<User>('user', where(
+                and(
+                    eq('groupchatId', appContext.clientUser.groupchatId),
+                    neq('identity', spacetimeContext.connection.identity.toHexString())
+                )
+            ));
         }
     })
     
@@ -110,18 +117,25 @@
             <!-- USERS -->
             <Col xs="3">
                 {#if appContext.clientUser}
-                    <Card>
-                        <CardHeader>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</CardHeader>
+                    <Card class="border-primary">
+                        <CardHeader><h6>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</h6></CardHeader>
                         <CardBody>Groupchat: {appContext.clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
-                {#each appContext.users.rows ?? [] as user}
-                    <Card class="my-2">
-                        <CardHeader>{user.name ? user.name : user.identity.toHexString()}</CardHeader>
-                        <CardBody>In Groupchat: {user.groupchatId}</CardBody>
-                    </Card>
-                {/each}
-            </Col>
+                {#if groupChatMembersTable}
+                    {#each groupChatMembersTable.rows ?? [] as user}
+                        <Card class="my-2">
+                            <CardHeader>{user.name ? user.name : user.identity.toHexString()}</CardHeader>
+                            <CardBody>In Groupchat: {user.groupchatId}</CardBody>
+                        </Card>
+                    {/each}
+                {/if}
+                {#if appContext.users}
+                    {#each appContext.users.rows ?? [] as user}
+                        <Badge pill={true} color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]} class="me-1" style="padding-left: 0.2em; max-width: 1em;">{user.name ? user.name[0] : user.identity.toHexString().at(-1)}</Badge>
+                    {/each}
+                {/if}
+                </Col>
         </Row>
     </Container>
 

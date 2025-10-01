@@ -2,6 +2,7 @@ export type Value = string | number | boolean;
 
 export type Expr<Column extends string> =
   | { type: 'eq'; key: Column; value: Value }
+  | { type: 'neq'; key: Column; value: Value }
   | { type: 'and'; children: Expr<Column>[] }
   | { type: 'or'; children: Expr<Column>[] };
 
@@ -9,6 +10,11 @@ export const eq = <Column extends string>(
   key: Column,
   value: Value
 ): Expr<Column> => ({ type: 'eq', key, value });
+
+export const neq = <Column extends string>(
+  key: Column,
+  value: Value
+): Expr<Column> => ({ type: 'neq', key, value });
 
 export const and = <Column extends string>(
   ...children: Expr<Column>[]
@@ -48,6 +54,8 @@ export function evaluate<Column extends string, RowType = any>(
   switch (expr.type) {
     case 'eq':
       return rowRecord[expr.key] === expr.value;
+    case 'neq':
+      return rowRecord[expr.key] !== expr.value;
     case 'and':
       return expr.children.every(child => evaluate(child, row));
     case 'or':
@@ -87,10 +95,12 @@ export function toQueryString<Column extends string>(expr: Expr<Column>): string
   switch (expr.type) {
     case 'eq':
       return `${escapeIdent(expr.key)} = ${formatValue(expr.value)}`;
+    case 'neq':
+      return `${escapeIdent(expr.key)} != ${formatValue(expr.value)}`;
     case 'and':
-      return parenthesize(expr.children.map(toString).join(' AND '));
+      return parenthesize(expr.children.map(toQueryString).join(' AND '));
     case 'or':
-      return parenthesize(expr.children.map(toString).join(' OR '));
+      return parenthesize(expr.children.map(toQueryString).join(' OR '));
   }
 }
 
