@@ -12,6 +12,18 @@ pub struct User {
     groupchat_id: Option<String>
 }
 
+
+#[spacetimedb::table(name = groupchat_membership, public)]
+pub struct GroupChatMembership {
+    #[primary_key]
+    #[auto_inc]
+    id: u32,
+    #[index(btree)]
+    identity: Identity,
+    #[index(btree)]
+    groupchat_id: String
+}
+
 #[spacetimedb::table(name = message, public)]
 pub struct Message {
     sender: Identity,
@@ -74,8 +86,13 @@ pub fn join_groupchat(ctx: &ReducerContext, groupchat: String) -> Result<(), Str
     if let Some(user) = ctx.db.user().identity().find(ctx.sender) {
         if ctx.db.groupchat().id().find(&groupchat).is_some() {
             ctx.db.user().identity().update(User {
-                groupchat_id: Some(groupchat),
+                groupchat_id: Some(groupchat.clone()),
                 ..user
+            });
+            ctx.db.groupchat_membership().insert(GroupChatMembership {
+                id: 0,
+                identity: ctx.sender,
+                groupchat_id: groupchat
             });
             Ok(())
         } else {

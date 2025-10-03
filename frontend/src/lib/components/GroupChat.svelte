@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, colorMode, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
-	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/getReactiveTable.svelte";
-	import { DbConnection, GroupChat, Message, SendMessage, User } from "./spacetime/module_bindings";
+	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/createReactiveTable.svelte";
+	import { DbConnection, GroupChat, GroupChatMembership, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { getContext, onDestroy } from "svelte";
 	import { eq, neq, and, where } from "./spacetime/svelte_context/QueryFormatting";
@@ -19,18 +19,20 @@
         if (appContext.clientUser?.groupchatId && spacetimeContext.connection?.identity) {
             messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
             groupChatMembersTable = createReactiveTable<User>('user', where(
-                and(
-                    eq('groupchatId', appContext.clientUser.groupchatId),
-                    neq('identity', spacetimeContext.connection.identity.toHexString())
-                )
+                eq('groupchatId', appContext.clientUser.groupchatId)
             ));
         }
     })
-    
+
+    let membershipsTable = createReactiveTable<GroupChatMembership>('groupchat_membership');
+
+
     // Clean up reactive tables when component is destroyed
     onDestroy(() => {
         groupChatsTable.destroy();
         messagesTable?.destroy();
+        groupChatMembersTable?.destroy();
+        membershipsTable?.destroy();
     });
 
     let createGroupChatModalOpen = $state(false);
@@ -122,11 +124,12 @@
                         <CardBody>Groupchat: {appContext.clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
-                {#if groupChatMembersTable}
-                    {#each groupChatMembersTable.rows ?? [] as user}
+                {#if membershipsTable}
+                    All Memberships:
+                    {#each membershipsTable.rows ?? [] as user}
                         <Card class="my-2">
-                            <CardHeader>{user.name ? user.name : user.identity.toHexString()}</CardHeader>
-                            <CardBody>In Groupchat: {user.groupchatId}</CardBody>
+                            <CardHeader>...{user.identity.toHexString().slice(-6)}</CardHeader>
+                            <CardBody>{user.groupchatId}</CardBody>
                         </Card>
                     {/each}
                 {/if}

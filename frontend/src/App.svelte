@@ -5,7 +5,7 @@
 	import { Styles } from "@sveltestrap/sveltestrap";
 	import { onDestroy, setContext } from "svelte";
 	import { getSpacetimeContext } from "$lib/components/spacetime/SpacetimeContext.svelte";
-	import { createReactiveTable, type ReactiveTable } from "$lib/components/spacetime/svelte_context/getReactiveTable.svelte";
+	import { createReactiveTable, type ReactiveTable } from "$lib/components/spacetime/svelte_context/createReactiveTable.svelte";
 	import { AppContext } from "$lib/AppContext.svelte";
 
     const spacetimeContext = getSpacetimeContext<DbConnection>();

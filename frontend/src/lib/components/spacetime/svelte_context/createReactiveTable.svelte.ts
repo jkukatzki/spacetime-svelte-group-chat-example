@@ -10,12 +10,18 @@ export interface UseQueryCallbacks<RowType> {
   onUpdate?: (oldRow: RowType, newRow: RowType) => void;
 }
 
+/**
+ * Convert snake_case table name to camelCase property name.
+ * Examples:
+ *   "user" -> "user"
+ *   "groupchat_membership" -> "groupchatMembership"
+ *   "group_chat_membership" -> "groupChatMembership"
+ */
+function snakeToCamel(tableName: string): string {
+  return tableName.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
 
 
-type Snapshot<RowType> = {
-  readonly rows: readonly RowType[];
-  readonly state: 'loading' | 'ready';
-};
 
 /**
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
@@ -26,6 +32,7 @@ export class ReactiveTable<T> {
   state: 'loading' | 'ready' = $state('loading');
   
   private tableName: string;
+  private tablePropertyName: string | null = null;
   private whereClause?: Expr<keyof T & string>;
   private callbacks?: UseQueryCallbacks<T>;
   private subscription: any = undefined;
@@ -59,6 +66,25 @@ export class ReactiveTable<T> {
     }
 
     this.initialize(context);
+  }
+
+  /**
+   * Get the property name to access the table on the db object.
+   * This is cached after the first lookup.
+   */
+  private getTableProperty(context: SpacetimeDBContext): string | null {
+    if (this.tablePropertyName) {
+      return this.tablePropertyName;
+    }
+    
+    if (!context.connection?.db) {
+      return null;
+    }
+    
+    // Convert snake_case to camelCase
+    this.tablePropertyName = snakeToCamel(this.tableName);
+    
+    return this.tablePropertyName;
   }
 
   private setupConnectionWatcher(context: SpacetimeDBContext) {
@@ -149,7 +175,13 @@ export class ReactiveTable<T> {
       return;
     }
 
-    const table = context.connection.db[this.tableName] as any;
+    const propertyName = this.getTableProperty(context);
+    if (!propertyName) {
+      console.error('ReactiveTable: Could not find table property for:', this.tableName);
+      return;
+    }
+
+    const table = context.connection.db[propertyName] as any;
     
     if (table && 'onInsert' in table) {
       const onInsert = (ctx: any, row: T) => {
@@ -221,7 +253,14 @@ export class ReactiveTable<T> {
       return;
     }
 
-    const table = context.connection.db[this.tableName] as any;
+    const propertyName = this.getTableProperty(context);
+    if (!propertyName) {
+      console.error('ReactiveTable: Could not find table property for:', this.tableName);
+      this.rows = [];
+      return;
+    }
+
+    const table = context.connection.db[propertyName] as any;
     if (table && 'iter' in table) {
       const allRows = table.iter() as T[];
       this.rows = this.whereClause
@@ -340,207 +379,4 @@ function classifyMembership<
     return 'stayIn';
   }
   return 'stayOut';
-}
-
-type ColumnsFromRow<R> = {
-  [K in keyof R]-?: R[K] extends Value | undefined ? K : never;
-}[keyof R] &
-  string;
-
-export function getReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType, // Remove the extends constraint to allow proper typing
-  TableName extends keyof DbConnection['db'] & string = keyof DbConnection['db'] & string,
->(
-  tableName: TableName,
-  whereClauseOrCallbacks?:
-    | (() => Expr<keyof RowType & string>)
-    | Expr<keyof RowType & string>
-    | UseQueryCallbacks<RowType>,
-  callbacks?: UseQueryCallbacks<RowType>
-): Snapshot<RowType> {
-  let whereClauseFunc: (() => Expr<keyof RowType & string>) | undefined;
-  let staticWhereClause: Expr<keyof RowType & string> | undefined;
-  
-  if (whereClauseOrCallbacks) {
-    if (typeof whereClauseOrCallbacks === 'function') {
-      whereClauseFunc = whereClauseOrCallbacks as () => Expr<ColumnsFromRow<RowType>>;
-    } else if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
-      staticWhereClause = whereClauseOrCallbacks as Expr<ColumnsFromRow<RowType>>;
-    } else {
-      callbacks = whereClauseOrCallbacks as UseQueryCallbacks<RowType> | undefined;
-    }
-  }
-
-  let client: DbConnection;
-  try {
-    client = getSpacetimeContext<DbConnection>().connection!;
-  } catch {
-    throw new Error(
-      'Could not find SpacetimeDB client! Did you forget to add a ' +
-        '`SpacetimeDBProvider`? `getReactiveTable` must be used in the Svelte component tree ' +
-        'under a `SpacetimeDBProvider` component.'
-    );
-  }
-
-  // Svelte 5 reactive state
-  let subscribeApplied = $state(false);
-  let isActive = $state(false);
-  let latestTransactionEvent = $state<any>(null);
-
-  // Reactive where clause - updates when reactive dependencies change
-  const currentWhereClause = $derived(
-    whereClauseFunc ? whereClauseFunc() : staticWhereClause
-  );
-
-  // Reactive query - updates when where clause changes
-  const currentQuery = $derived(
-    `SELECT * FROM ${tableName}` +
-    (currentWhereClause ? ` WHERE ${toQueryString(currentWhereClause)}` : '')
-  );
-
-  const computeSnapshot = (): Snapshot<RowType> => {
-    const table = client.db[
-      tableName as keyof typeof client.db
-    ] as unknown as { iter(): RowType[] };
-    const result: readonly RowType[] = currentWhereClause
-      ? table.iter().filter(row => evaluate(currentWhereClause, row))
-      : table.iter();
-    return {
-      rows: result,
-      state: subscribeApplied ? 'ready' : 'loading',
-    };
-  };
-
-  // Create reactive snapshot - updates when data or where clause changes
-  let snapshot = $derived(computeSnapshot());
-
-  onMount(() => {
-    // Set up connection state listeners
-    const onConnect = () => {
-      isActive = (client as any).isActive || true;
-    };
-    const onDisconnect = () => {
-      isActive = (client as any).isActive || false;
-    };
-    const onConnectError = () => {
-      isActive = (client as any).isActive || false;
-    };
-
-    // Add event listeners if the client supports them
-    const clientWithEvents = client as any;
-    if (clientWithEvents.on && typeof clientWithEvents.on === 'function') {
-      clientWithEvents.on('connect', onConnect);
-      clientWithEvents.on('disconnect', onDisconnect);
-      clientWithEvents.on('connectError', onConnectError);
-    }
-
-    // Set up subscription that reacts to query changes
-    let currentSubscription: any = undefined;
-    $effect(() => {
-      // Clean up previous subscription
-      if (currentSubscription) {
-        currentSubscription.unsubscribe();
-        subscribeApplied = false;
-      }
-
-      // Set up new subscription with current query
-      if (isActive && 'subscriptionBuilder' in client && typeof client.subscriptionBuilder === 'function') {
-        currentSubscription = (client as any)
-          .subscriptionBuilder()
-          .onApplied(() => {
-            untrack(() => {
-              subscribeApplied = true;
-            });
-          })
-          .subscribe(currentQuery);
-      }
-    });
-
-    // Set up table event listeners for real-time updates
-    const table = client.db[tableName as keyof typeof client.db] as any;
-    
-    if (table && 'onInsert' in table) {
-      const onInsert = (ctx: any, row: RowType) => {
-        // Use current where clause for filtering
-        const whereClause = currentWhereClause;
-        if (whereClause && !evaluate(whereClause, row)) {
-          return;
-        }
-        callbacks?.onInsert?.(row);
-        if (ctx.event !== latestTransactionEvent || !latestTransactionEvent) {
-          untrack(() => {
-            latestTransactionEvent = ctx.event;
-            // Trigger reactivity by updating a reactive value
-            latestTransactionEvent = ctx.event;
-          });
-        }
-      };
-
-      const onDelete = (ctx: any, row: RowType) => {
-        // Use current where clause for filtering
-        const whereClause = currentWhereClause;
-        if (whereClause && !evaluate(whereClause, row)) {
-          return;
-        }
-        callbacks?.onDelete?.(row);
-        if (ctx.event !== latestTransactionEvent || !latestTransactionEvent) {
-          untrack(() => {
-            latestTransactionEvent = ctx.event;
-          });
-        }
-      };
-
-      const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
-        // Use current where clause for filtering
-        const whereClause = currentWhereClause;
-        const change = classifyMembership(whereClause, oldRow, newRow);
-        
-        if (change === 'enter') {
-          callbacks?.onInsert?.(newRow);
-        } else if (change === 'leave') {
-          callbacks?.onDelete?.(oldRow);
-        } else if (change === 'stayIn') {
-          callbacks?.onUpdate?.(oldRow, newRow);
-        }
-        // 'stayOut' requires no action
-
-        if (change !== 'stayOut' && (ctx.event !== latestTransactionEvent || !latestTransactionEvent)) {
-          untrack(() => {
-            latestTransactionEvent = ctx.event;
-          });
-        }
-      };
-
-      table.onInsert(onInsert);
-      table.onDelete(onDelete);
-      if ('onUpdate' in table) {
-        table.onUpdate(onUpdate);
-      }
-
-      // Clean up function
-      return () => {
-        if (currentSubscription) {
-          currentSubscription.unsubscribe();
-        }
-        if ('removeOnInsert' in table) {
-          table.removeOnInsert(onInsert);
-          table.removeOnDelete(onDelete);
-          if ('removeOnUpdate' in table) {
-            table.removeOnUpdate(onUpdate);
-          }
-        }
-        if (clientWithEvents.off && typeof clientWithEvents.off === 'function') {
-          clientWithEvents.off('connect', onConnect);
-          clientWithEvents.off('disconnect', onDisconnect);
-          clientWithEvents.off('connectError', onConnectError);
-        }
-      };
-    }
-
-    // Initialize connection state
-    isActive = (client as any).isActive || true;
-  });
-
-  return snapshot;
 }

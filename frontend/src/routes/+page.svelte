@@ -4,7 +4,7 @@
     import App from "../App.svelte";
     
     const connectionBuilder = DbConnection.builder()
-        .withUri('ws://192.168.178.103:3000')
+        .withUri('ws://localhost:3000')
         .withModuleName('groupchat');
 </script>
 <SpacetimeDBProvider {connectionBuilder}>
