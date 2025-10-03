@@ -211,19 +211,19 @@ export class RemoteReducers {
     this.connection.offReducer("join_groupchat", callback);
   }
 
-  sendMessage(text: string) {
-    const __args = { text };
+  sendMessage(groupchat: string, text: string) {
+    const __args = { groupchat, text };
     let __writer = new __BinaryWriter(1024);
     SendMessage.serialize(__writer, __args);
     let __argsBuffer = __writer.getBuffer();
     this.connection.callReducer("send_message", __argsBuffer, this.setCallReducerFlags.sendMessageFlags);
   }
 
-  onSendMessage(callback: (ctx: ReducerEventContext, text: string) => void) {
+  onSendMessage(callback: (ctx: ReducerEventContext, groupchat: string, text: string) => void) {
     this.connection.onReducer("send_message", callback);
   }
 
-  removeOnSendMessage(callback: (ctx: ReducerEventContext, text: string) => void) {
+  removeOnSendMessage(callback: (ctx: ReducerEventContext, groupchat: string, text: string) => void) {
     this.connection.offReducer("send_message", callback);
   }
 

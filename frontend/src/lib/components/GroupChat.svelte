@@ -11,14 +11,14 @@
     let spacetimeContext = getSpacetimeContext<DbConnection>();
     let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat');
     let messagesTable: ReactiveTable<Message> | null = $state(null);
-    let groupChatMembersTable: ReactiveTable<User> | null = $state(null);
+    let groupChatMembersTable: ReactiveTable<GroupChatMembership> | null = $state(null);
 
     const appContext: AppContext = getContext('AppContext');
 
     $effect(() => {
         if (appContext.clientUser?.groupchatId && spacetimeContext.connection?.identity) {
             messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
-            groupChatMembersTable = createReactiveTable<User>('user', where(
+            groupChatMembersTable = createReactiveTable<GroupChatMembership>('groupchat_membership', where(
                 eq('groupchatId', appContext.clientUser.groupchatId)
             ));
         }

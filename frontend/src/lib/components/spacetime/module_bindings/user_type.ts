@@ -30,8 +30,6 @@ import {
 export type User = {
   identity: __Identity,
   name: string | undefined,
-  online: boolean,
-  groupchatId: string | undefined,
 };
 /**
  * An object for generated helper functions.
@@ -46,8 +44,6 @@ export const User = {
       elements: [
         { name: "identity", algebraicType: __AlgebraicTypeValue.createIdentityType()},
         { name: "name", algebraicType: __AlgebraicTypeValue.createOptionType(__AlgebraicTypeValue.String)},
-        { name: "online", algebraicType: __AlgebraicTypeValue.Bool},
-        { name: "groupchatId", algebraicType: __AlgebraicTypeValue.createOptionType(__AlgebraicTypeValue.String)},
       ]
     });
   },

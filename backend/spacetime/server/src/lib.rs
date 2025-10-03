@@ -7,13 +7,12 @@ pub struct User {
     #[primary_key]
     identity: Identity,
     name: Option<String>,
-    online: bool,
-    #[index(btree)]
-    groupchat_id: Option<String>
 }
 
 
-#[spacetimedb::table(name = groupchat_membership, public)]
+#[spacetimedb::table(name = groupchat_membership,
+    index(name = user_and_groupchat, btree(columns = [identity, groupchat_id])),
+    public)]
 pub struct GroupChatMembership {
     #[primary_key]
     #[auto_inc]
@@ -85,15 +84,16 @@ pub fn create_groupchat(ctx: &ReducerContext, name: String) -> Result<(), String
 pub fn join_groupchat(ctx: &ReducerContext, groupchat: String) -> Result<(), String> {
     if let Some(user) = ctx.db.user().identity().find(ctx.sender) {
         if ctx.db.groupchat().id().find(&groupchat).is_some() {
-            ctx.db.user().identity().update(User {
-                groupchat_id: Some(groupchat.clone()),
-                ..user
-            });
-            ctx.db.groupchat_membership().insert(GroupChatMembership {
-                id: 0,
-                identity: ctx.sender,
-                groupchat_id: groupchat
-            });
+            // if membership to this groupchat already exists for this user, error out
+            if ctx.db.groupchat_membership().user_and_groupchat().filter((user.identity, &groupchat)).next().is_none() {
+                ctx.db.groupchat_membership().insert(GroupChatMembership {
+                    id: 0,
+                    identity: ctx.sender,
+                    groupchat_id: groupchat
+                });
+            } else {
+                return Err("User is already a member of this group chat".to_string());
+            }
             Ok(())
         } else {
             Err("Group chat does not exist".to_string())
@@ -104,22 +104,20 @@ pub fn join_groupchat(ctx: &ReducerContext, groupchat: String) -> Result<(), Str
 }
 
 #[spacetimedb::reducer]
-pub fn send_message(ctx: &ReducerContext, text: String) -> Result<(), String> {
+pub fn send_message(ctx: &ReducerContext, groupchat: String, text: String) -> Result<(), String> {
     let text = validate_message(text)?;
-    let groupchat_id = if let Some(user) = ctx.db.user().identity().find(ctx.sender) {
-        if let Some(gc_id) = &user.groupchat_id {
-            gc_id.clone()
-        } else {
-            return Err("User is not in a group chat".to_string());
-        }
-    } else {
-        return Err("Cannot send message for unknown user".to_string());
-    };
+    // check if groupchat exists and if membership exists for this user in this groupchat
+    if ctx.db.groupchat().id().find(&groupchat).is_none() {
+        return Err("Group chat does not exist".to_string());
+    }
+    if ctx.db.groupchat_membership().user_and_groupchat().filter((ctx.sender, &groupchat)).next().is_none() {
+        return Err("User is not a member of this group chat".to_string());
+    }
     ctx.db.message().insert(Message {
         sender: ctx.sender,
         text,
         sent: ctx.timestamp,
-        groupchat_id
+        groupchat_id: groupchat
     });
     Ok(())
 }
@@ -130,29 +128,23 @@ pub fn init(_ctx: &ReducerContext) {}
 
 #[spacetimedb::reducer(client_connected)]
 pub fn identity_connected(ctx: &ReducerContext) {
-    if let Some(user) = ctx.db.user().identity().find(ctx.sender) {
-        // If this is a returning user, i.e. we already have a `User` with this `Identity`,
-        // set `online: true`, but leave `name` and `identity` unchanged.
-        ctx.db.user().identity().update(User { online: true, ..user });
-    } else {
+    if ctx.db.user().identity().find(ctx.sender).is_none() {
         // If this is a new user, create a `User` row for the `Identity`,
         // which is online, but hasn't set a name.
         ctx.db.user().insert(User {
             name: None,
             identity: ctx.sender,
-            online: true,
-            groupchat_id: None
         });
     }
 }
 
 #[spacetimedb::reducer(client_disconnected)]
 pub fn identity_disconnected(ctx: &ReducerContext) {
+    // remove the user and all their group chat memberships when they disconnect
+    for membership in ctx.db.groupchat_membership().identity().filter(ctx.sender) {
+        ctx.db.groupchat_membership().id().delete(membership.id);
+    }
     if let Some(user) = ctx.db.user().identity().find(ctx.sender) {
-        ctx.db.user().identity().update(User { online: false, groupchat_id: None, ..user });
-    } else {
-        // This branch should be unreachable,
-        // as it doesn't make sense for a client to disconnect without connecting first.
-        log::warn!("Disconnect event for unknown user with identity {:?}", ctx.sender);
+        ctx.db.user().identity().delete(user.identity);
     }
 }
