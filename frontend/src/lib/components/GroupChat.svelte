@@ -9,30 +9,50 @@
 	import type { AppContext } from "$lib/AppContext.svelte";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
-    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat');
+    // Type-safe! Just pass the row type constructor
+    let groupChatsTable = createReactiveTable<DbConnection, GroupChat>(GroupChat);
     let messagesTable: ReactiveTable<Message> | null = $state(null);
     let groupChatMembersTable: ReactiveTable<GroupChatMembership> | null = $state(null);
 
     const appContext: AppContext = getContext('AppContext');
 
+    let selectedGroupChat: GroupChat | null = $state(null);
+
     $effect(() => {
         if (appContext.clientUser?.groupchatId && spacetimeContext.connection?.identity) {
-            messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
-            groupChatMembersTable = createReactiveTable<GroupChatMembership>('groupchat_membership', where(
+            // Pass row type constructor + where clause
+            messagesTable = createReactiveTable<DbConnection, Message>(Message, where(eq('groupchatId', appContext.clientUser.groupchatId)));
+            groupChatMembersTable = createReactiveTable<DbConnection, GroupChatMembership>(GroupChatMembership, where(
                 eq('groupchatId', appContext.clientUser.groupchatId)
             ));
         }
     })
 
-    let membershipsTable = createReactiveTable<GroupChatMembership>('groupchat_membership');
+    let clientMembershipsTable: ReactiveTable<GroupChatMembership> | null = $state(null);
+    
+    
+    $effect(() => {
+        if (spacetimeContext.connected && spacetimeContext.connection?.identity) {
+            console.log("Creating client memberships table for identity", spacetimeContext.connection.identity.toHexString());
+            // Type-safe with row type constructor!
+            clientMembershipsTable = createReactiveTable<DbConnection, GroupChatMembership>(GroupChatMembership);//, where(
+            //     eq('identity', '0x'+spacetimeContext.connection.identity.toHexString())
+            // ));
+        }
+    })
 
+    $effect(() => {
+        if (clientMembershipsTable?.rows) {
+            console.log("Client memberships updated:", clientMembershipsTable.rows);
+        }
+    })
 
     // Clean up reactive tables when component is destroyed
     onDestroy(() => {
         groupChatsTable.destroy();
         messagesTable?.destroy();
         groupChatMembersTable?.destroy();
-        membershipsTable?.destroy();
+        clientMembershipsTable?.destroy();
     });
 
     let createGroupChatModalOpen = $state(false);
@@ -69,7 +89,15 @@
         <Row class="mt-4">
             <Col xs="2">
                 <!-- GROUP CHATS -->
-                
+                {#if clientMembershipsTable}
+                    All Memberships:
+                    {#each clientMembershipsTable.rows ?? [] as user}
+                        <Card class="my-2">
+                            <CardHeader>...{user.identity.toHexString().slice(-6)}</CardHeader>
+                            <CardBody>{user.groupchatId}</CardBody>
+                        </Card>
+                    {/each}
+                {/if}
                 {#if spacetimeContext.connected && groupChatsTable.rows !== undefined}
                     <Button onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>New Chat +</Button>
                     <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
@@ -124,15 +152,7 @@
                         <CardBody>Groupchat: {appContext.clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
-                {#if membershipsTable}
-                    All Memberships:
-                    {#each membershipsTable.rows ?? [] as user}
-                        <Card class="my-2">
-                            <CardHeader>...{user.identity.toHexString().slice(-6)}</CardHeader>
-                            <CardBody>{user.groupchatId}</CardBody>
-                        </Card>
-                    {/each}
-                {/if}
+                
                 {#if appContext.users}
                     {#each appContext.users.rows ?? [] as user}
                         <Badge pill={true} color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]} class="me-1" style="padding-left: 0.2em; max-width: 1em;">{user.name ? user.name[0] : user.identity.toHexString().at(-1)}</Badge>

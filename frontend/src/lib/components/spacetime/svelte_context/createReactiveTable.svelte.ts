@@ -3,6 +3,38 @@ import { getSpacetimeContext, SpacetimeDBContext } from '../SpacetimeContext.sve
 import type { DbConnectionImpl } from 'spacetimedb';
 import { evaluate, toQueryString, type Expr, type Value } from './QueryFormatting';
 
+// Helper type to extract RemoteTables from DbConnection
+// DbConnection has a 'db' property that is of type RemoteTables
+type ExtractRemoteTables<TDbConnection> = 
+  TDbConnection extends { db: infer TTables } ? TTables : never;
+
+// Helper type to extract the row type from a table handle
+// TableHandles have an 'iter()' method that returns Iterable<RowType>
+type ExtractRowType<T> = T extends { iter(): Iterable<infer R> } ? R : never;
+
+// Extract table names from RemoteTables
+type ExtractTableNames<TRemoteTables> = keyof TRemoteTables;
+
+// Map each table name to its row type
+type ExtractTableMap<TRemoteTables> = {
+  [K in keyof TRemoteTables]: ExtractRowType<TRemoteTables[K]>
+};
+
+// Filter out table names that don't have valid types
+type ExtractValidTableNames<TRemoteTables> = {
+  [K in keyof TRemoteTables]: unknown extends ExtractRowType<TRemoteTables[K]> ? never : K
+}[keyof TRemoteTables];
+
+// Reverse lookup: Find table name from row type
+// This maps each RowType back to its table name(s)
+type FindTableNameForRowType<TRemoteTables, TRowType> = {
+  [K in keyof TRemoteTables]: ExtractRowType<TRemoteTables[K]> extends TRowType 
+    ? TRowType extends ExtractRowType<TRemoteTables[K]>
+      ? K
+      : never
+    : never
+}[keyof TRemoteTables];
+
 // Re-export query building utilities from React implementation
 export interface UseQueryCallbacks<RowType> {
   onInsert?: (row: RowType) => void;
@@ -31,7 +63,8 @@ export class ReactiveTable<T> {
   rows: T[] | undefined = $state();
   state: 'loading' | 'ready' = $state('loading');
   
-  private tableName: string;
+  private tableName: string | null = null;
+  private rowTypeHelper?: RowTypeHelper<T>;
   private tablePropertyName: string | null = null;
   private whereClause?: Expr<keyof T & string>;
   private callbacks?: UseQueryCallbacks<T>;
@@ -39,11 +72,17 @@ export class ReactiveTable<T> {
   private eventListeners: (() => void)[] = [];
 
   constructor(
-    tableName: string,
+    tableNameOrHelper: string | RowTypeHelper<T>,
     whereClause?: Expr<keyof T & string>,
     callbacks?: UseQueryCallbacks<T>
   ) {
-    this.tableName = tableName;
+    // Determine if we received a table name or row type helper
+    if (typeof tableNameOrHelper === 'string') {
+      this.tableName = tableNameOrHelper;
+    } else {
+      this.rowTypeHelper = tableNameOrHelper;
+    }
+    
     this.whereClause = whereClause;
     this.callbacks = callbacks;
     const context = getSpacetimeContext();
@@ -52,7 +91,7 @@ export class ReactiveTable<T> {
       
       
       if (!context.connection) {
-        console.log('ReactiveTable: Connection not available yet for table:', this.tableName);
+        console.log('ReactiveTable: Connection not available yet for table:', this.tableName || '(from row type)');
         // Set up a watcher for when connection becomes available
         this.setupConnectionWatcher(context);
         return;
@@ -66,6 +105,45 @@ export class ReactiveTable<T> {
     }
 
     this.initialize(context);
+  }
+  
+  /**
+   * Resolve the table name from the row type helper by comparing AlgebraicTypes
+   */
+  private resolveTableName(context: SpacetimeDBContext): string | null {
+    if (this.tableName) {
+      return this.tableName;
+    }
+    
+    if (!this.rowTypeHelper) {
+      return null;
+    }
+    
+    const conn = context.connection as any;
+    if (!conn) {
+      return null;
+    }
+    
+    // Get the AlgebraicType from the row type helper
+    const targetAlgebraicType = this.rowTypeHelper.getTypeScriptAlgebraicType();
+    const targetTypeStr = JSON.stringify(targetAlgebraicType);
+    
+    // Try to access REMOTE_MODULE metadata
+    if (conn._remoteModule && conn._remoteModule.tables) {
+      const tables = conn._remoteModule.tables;
+      
+      // Search for matching table
+      for (const [key, tableInfo] of Object.entries(tables)) {
+        const tableTypeStr = JSON.stringify((tableInfo as any).rowType);
+        if (tableTypeStr === targetTypeStr) {
+          this.tableName = (tableInfo as any).tableName;
+          return this.tableName;
+        }
+      }
+    }
+    
+    console.warn('ReactiveTable: Could not resolve table name from row type helper');
+    return null;
   }
 
   /**
@@ -81,8 +159,14 @@ export class ReactiveTable<T> {
       return null;
     }
     
+    // Resolve table name if needed
+    const tableName = this.resolveTableName(context);
+    if (!tableName) {
+      return null;
+    }
+    
     // Convert snake_case to camelCase
-    this.tablePropertyName = snakeToCamel(this.tableName);
+    this.tablePropertyName = snakeToCamel(tableName);
     
     return this.tablePropertyName;
   }
@@ -146,7 +230,14 @@ export class ReactiveTable<T> {
   private setupSubscription(context: SpacetimeDBContext) {
     // Don't set up subscription if client isn't ready
     if (!context.connection) {
-      console.log('ReactiveTable: No client available for subscription setup:', this.tableName);
+      console.log('ReactiveTable: No client available for subscription setup');
+      return;
+    }
+    
+    // Resolve table name
+    const tableName = this.resolveTableName(context);
+    if (!tableName) {
+      console.error('ReactiveTable: Could not resolve table name for subscription');
       return;
     }
 
@@ -155,7 +246,7 @@ export class ReactiveTable<T> {
       this.subscription.unsubscribe();
     }
 
-    const query = `SELECT * FROM ${this.tableName}` +
+    const query = `SELECT * FROM ${tableName}` +
       (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
     console.log('QUERY', query);
     if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
@@ -171,7 +262,7 @@ export class ReactiveTable<T> {
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
     if (!context.connection || !context.connection.db) {
-      console.log('ReactiveTable: No client or db available for event listeners:', this.tableName);
+      console.log('ReactiveTable: No client or db available for event listeners');
       return;
     }
 
@@ -309,47 +400,94 @@ type MembershipChange = 'enter' | 'leave' | 'stayIn' | 'stayOut';
  * Factory function to create a ReactiveTable instance.
  * This provides a convenient way to create reactive tables with proper TypeScript typing.
  * 
+ * The row type is specified, and validation ensures it matches a valid table in your schema.
+ * 
  * @example
  * ```svelte
  * <script>
- *   import { createReactiveTable, eq, where } from './getReactiveTable.js';
- *   import type { Message } from '../module_bindings';
+ *   import { createReactiveTable, eq, where } from './createReactiveTable.svelte';
+ *   import type { DbConnection } from '../module_bindings';
+ *   import { Message, User } from '../module_bindings';
  *   
- *   // Create reactive table with where clause
- *   const messageTable = createReactiveTable<Message>('message', where(eq('chatId', 123)), {
- *     onInsert: (row) => console.log('New message:', row),
- *     onUpdate: (oldRow, newRow) => console.log('Updated message:', oldRow, newRow),
- *     onDelete: (row) => console.log('Deleted message:', row)
+ *   // Provide the row type object as first argument
+ *   const messageTable = createReactiveTable<DbConnection, Message>(Message, where(eq('groupchatId', 123)));
+ *   
+ *   // With callbacks
+ *   const userTable = createReactiveTable<DbConnection, User>(User, {
+ *     onInsert: (row) => console.log('New user:', row),
  *   });
- *   
- *   // Access reactive data
- *   $: console.log('Messages:', messageTable.rows);
- *   $: console.log('State:', messageTable.state);
  * </script>
  * ```
  */
 
-export function createReactiveTable<T>(
-  tableName: string,
-  whereClauseOrCallbacks?: Expr<keyof T & string> | UseQueryCallbacks<T>,
-  callbacks?: UseQueryCallbacks<T>
-): ReactiveTable<T> {
-  let whereClause: Expr<keyof T & string> | undefined;
-  let actualCallbacks: UseQueryCallbacks<T> | undefined;
-  
-  // Handle different parameter combinations
+// Helper interface for row type objects that have getTypeScriptAlgebraicType
+interface RowTypeHelper<T> {
+  getTypeScriptAlgebraicType(): any;
+  serialize?: (writer: any, value: T) => void;
+  deserialize?: (reader: any) => T;
+}
+
+// Type-safe overload: rowType helper only
+export function createReactiveTable<
+  TDbConnection extends DbConnectionImpl,
+  TRowType
+>(
+  rowType: RowTypeHelper<TRowType>
+): ReactiveTable<TRowType>;
+
+// Type-safe overload: rowType + whereClause
+export function createReactiveTable<
+  TDbConnection extends DbConnectionImpl,
+  TRowType
+>(
+  rowType: RowTypeHelper<TRowType>,
+  whereClause: Expr<keyof TRowType & string>
+): ReactiveTable<TRowType>;
+
+// Type-safe overload: rowType + callbacks
+export function createReactiveTable<
+  TDbConnection extends DbConnectionImpl,
+  TRowType
+>(
+  rowType: RowTypeHelper<TRowType>,
+  callbacks: UseQueryCallbacks<TRowType>
+): ReactiveTable<TRowType>;
+
+// Type-safe overload: rowType + whereClause + callbacks
+export function createReactiveTable<
+  TDbConnection extends DbConnectionImpl,
+  TRowType
+>(
+  rowType: RowTypeHelper<TRowType>,
+  whereClause: Expr<keyof TRowType & string>,
+  callbacks: UseQueryCallbacks<TRowType>
+): ReactiveTable<TRowType>;
+
+// Implementation
+export function createReactiveTable<
+  TDbConnection extends DbConnectionImpl,
+  TRowType
+>(
+  rowType: RowTypeHelper<TRowType>,
+  whereClauseOrCallbacks?: Expr<keyof TRowType & string> | UseQueryCallbacks<TRowType>,
+  callbacks?: UseQueryCallbacks<TRowType>
+): ReactiveTable<TRowType> {
+  // Parse arguments
+  let whereClause: Expr<keyof TRowType & string> | undefined;
+  let actualCallbacks: UseQueryCallbacks<TRowType> | undefined;
+
   if (whereClauseOrCallbacks) {
     if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
-      // First param is where clause
-      whereClause = whereClauseOrCallbacks as Expr<keyof T & string>;
+      whereClause = whereClauseOrCallbacks as Expr<keyof TRowType & string>;
       actualCallbacks = callbacks;
     } else {
-      // First param is callbacks
-      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<T>;
+      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<TRowType>;
     }
   }
 
-  return new ReactiveTable<T>(tableName, whereClause, actualCallbacks);
+  // Pass the row type helper directly to ReactiveTable
+  // It will resolve the table name using AlgebraicType comparison
+  return new ReactiveTable<TRowType>(rowType, whereClause, actualCallbacks);
 }
 
 /**
