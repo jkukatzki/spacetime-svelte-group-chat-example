@@ -1,15 +1,14 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, colorMode, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
-	import { createReactiveTable, type ReactiveTable } from "./spacetime/svelte_context/createReactiveTable.svelte";
+	import { createReactiveTable, type ReactiveTable, eq, where } from "./spacetime/svelte_context";
 	import { DbConnection, GroupChat, GroupChatMembership, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { getContext, onDestroy } from "svelte";
-	import { eq, neq, and, where } from "./spacetime/svelte_context/QueryFormatting";
 	import type { AppContext } from "$lib/AppContext.svelte";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
-    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<GroupChat>('groupchat');
+    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<DbConnection, GroupChat>('groupchat');
     let messagesTable: ReactiveTable<Message> | null = $state(null);
     let groupChatMembersTable: ReactiveTable<GroupChatMembership> | null = $state(null);
 
@@ -17,14 +16,14 @@
 
     $effect(() => {
         if (appContext.clientUser?.groupchatId && spacetimeContext.connection?.identity) {
-            messagesTable = createReactiveTable<Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
-            groupChatMembersTable = createReactiveTable<GroupChatMembership>('groupchat_membership', where(
+            messagesTable = createReactiveTable<DbConnection, Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
+            groupChatMembersTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership', where(
                 eq('groupchatId', appContext.clientUser.groupchatId)
             ));
         }
     })
 
-    let membershipsTable = createReactiveTable<GroupChatMembership>('groupchat_membership');
+    let membershipsTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership');
 
 
     // Clean up reactive tables when component is destroyed

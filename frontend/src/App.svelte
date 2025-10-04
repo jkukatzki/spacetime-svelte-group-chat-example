@@ -12,11 +12,11 @@
 
     
 
-    const appContext = new AppContext(createReactiveTable<User>('user'));
+    const appContext = new AppContext(createReactiveTable<DbConnection, User>('user'));
 
     setContext('AppContext', appContext);
 
-    let usersTable: ReactiveTable<User> = createReactiveTable<User>('user', {
+    let usersTable: ReactiveTable<User> = createReactiveTable<DbConnection, User>('user', {
         onInsert: (user) => {
             if (spacetimeContext.connection?.identity && user.identity.isEqual(spacetimeContext.connection.identity)) {
                 appContext.clientUser = user;

@@ -81,7 +81,7 @@ export class ReactiveTable<T> {
       return null;
     }
     
-    // Convert snake_case to camelCase
+    // Convert snake_case table name to camelCase property name
     this.tablePropertyName = snakeToCamel(this.tableName);
     
     return this.tablePropertyName;
@@ -155,6 +155,7 @@ export class ReactiveTable<T> {
       this.subscription.unsubscribe();
     }
 
+    // Use table name directly in SQL query (snake_case)
     const query = `SELECT * FROM ${this.tableName}` +
       (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
     console.log('QUERY', query);
@@ -306,50 +307,144 @@ export class ReactiveTable<T> {
 type MembershipChange = 'enter' | 'leave' | 'stayIn' | 'stayOut';
 
 /**
- * Factory function to create a ReactiveTable instance.
- * This provides a convenient way to create reactive tables with proper TypeScript typing.
+ * Extracts the column names from a RowType whose values are of type Value.
+ * Note that this will exclude columns that are of type object, array, etc.
+ */
+type ColumnsFromRow<R> = {
+  [K in keyof R]-?: R[K] extends Value | undefined ? K : never;
+}[keyof R] &
+  string;
+
+/**
+ * Helper type to extract the row type from a table handle.
+ * Table handles have a tableCache property with type TableCache<RowType>.
+ */
+type ExtractRowType<T> = T extends { tableCache: { iter(): Iterable<infer R> } }
+  ? R
+  : never;
+
+/**
+ * Helper type to convert camelCase to snake_case at the type level.
+ */
+type CamelToSnake<S extends string> = S extends `${infer First}${infer Rest}`
+  ? First extends Uppercase<First>
+    ? `_${Lowercase<First>}${CamelToSnake<Rest>}`
+    : `${First}${CamelToSnake<Rest>}`
+  : S;
+
+/**
+ * Union of all valid table names (camelCase from db properties OR snake_case SQL names).
+ */
+type ValidTableName<DbConnection extends DbConnectionImpl> = 
+  | keyof DbConnection['db'] & string
+  | CamelToSnake<keyof DbConnection['db'] & string>;
+
+/**
+ * Find the db property key that corresponds to the given table name (handles both camelCase and snake_case).
+ */
+type TableNameToDbKey<
+  DbConnection extends DbConnectionImpl,
+  TableName extends string
+> = TableName extends keyof DbConnection['db']
+  ? TableName
+  : {
+      [K in keyof DbConnection['db']]: CamelToSnake<K & string> extends TableName ? K : never
+    }[keyof DbConnection['db']];
+
+/**
+ * Assert that RowType matches the actual table row type.
+ * This creates a compile-time check that will fail if the types don't match.
+ */
+type AssertRowTypeMatches<
+  DbConnection extends DbConnectionImpl,
+  RowType,
+  TableName extends ValidTableName<DbConnection>
+> = [RowType] extends [ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>]
+  ? unknown
+  : { error: 'RowType does not match table row type'; expected: ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>; got: RowType };
+
+/**
+ * Factory function to create a ReactiveTable instance with full type safety.
+ * 
+ * Provides validation that:
+ * 1. The table name exists (as either camelCase property or snake_case SQL name)
+ * 2. The RowType matches the actual row type of that table
+ * 
+ * Unlike the React version, this accepts BOTH camelCase AND snake_case table names:
+ * - createReactiveTable<DbConnection, Message>('message') ✅
+ * - createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership') ✅
+ * - createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership') ✅
+ * 
+ * This will throw a TypeScript error for:
+ * - createReactiveTable<DbConnection, GroupChatMembership>('message') ❌ Wrong type!
+ * - createReactiveTable<DbConnection, Message>('invalid_table') ❌ Table doesn't exist!
+ * 
+ * @template DbConnection The type of the SpacetimeDB connection with typed db property.
+ * @template RowType The type of the table row (must match the table's actual row type).
  * 
  * @example
  * ```svelte
  * <script>
- *   import { createReactiveTable, eq, where } from './getReactiveTable.js';
- *   import type { Message } from '../module_bindings';
+ *   import { createReactiveTable, eq, where } from './svelte_context';
+ *   import type { DbConnection, Message, GroupChatMembership } from '../module_bindings';
  *   
- *   // Create reactive table with where clause
- *   const messageTable = createReactiveTable<Message>('message', where(eq('chatId', 123)), {
- *     onInsert: (row) => console.log('New message:', row),
- *     onUpdate: (oldRow, newRow) => console.log('Updated message:', oldRow, newRow),
- *     onDelete: (row) => console.log('Deleted message:', row)
- *   });
+ *   // ✅ All valid - accepts both camelCase and snake_case
+ *   const messageTable = createReactiveTable<DbConnection, Message>('message');
+ *   const members1 = createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership');
+ *   const members2 = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership');
  *   
- *   // Access reactive data
- *   $: console.log('Messages:', messageTable.rows);
- *   $: console.log('State:', messageTable.state);
+ *   // ❌ TypeScript error: GroupChatMembership doesn't match Message
+ *   const badTable = createReactiveTable<DbConnection, GroupChatMembership>('message');
  * </script>
  * ```
  */
 
-export function createReactiveTable<T>(
+// Overload with where clause
+export function createReactiveTable<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
+>(
+  tableName: TableName,
+  where: Expr<ColumnsFromRow<RowType>> & AssertRowTypeMatches<DbConnection, RowType, TableName>,
+  callbacks?: UseQueryCallbacks<RowType>
+): ReactiveTable<RowType>;
+
+// Overload without where clause
+export function createReactiveTable<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
+>(
+  tableName: TableName & AssertRowTypeMatches<DbConnection, RowType, TableName>,
+  callbacks?: UseQueryCallbacks<RowType>
+): ReactiveTable<RowType>;
+
+// Implementation
+export function createReactiveTable<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+>(
   tableName: string,
-  whereClauseOrCallbacks?: Expr<keyof T & string> | UseQueryCallbacks<T>,
-  callbacks?: UseQueryCallbacks<T>
-): ReactiveTable<T> {
-  let whereClause: Expr<keyof T & string> | undefined;
-  let actualCallbacks: UseQueryCallbacks<T> | undefined;
+  whereClauseOrCallbacks?: Expr<ColumnsFromRow<RowType>> | UseQueryCallbacks<RowType>,
+  callbacks?: UseQueryCallbacks<RowType>
+): ReactiveTable<RowType> {
+  let whereClause: Expr<ColumnsFromRow<RowType>> | undefined;
+  let actualCallbacks: UseQueryCallbacks<RowType> | undefined;
   
   // Handle different parameter combinations
   if (whereClauseOrCallbacks) {
     if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
       // First param is where clause
-      whereClause = whereClauseOrCallbacks as Expr<keyof T & string>;
+      whereClause = whereClauseOrCallbacks as Expr<ColumnsFromRow<RowType>>;
       actualCallbacks = callbacks;
     } else {
       // First param is callbacks
-      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<T>;
+      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<RowType>;
     }
   }
 
-  return new ReactiveTable<T>(tableName, whereClause, actualCallbacks);
+  return new ReactiveTable<RowType>(tableName as string, whereClause as any, actualCallbacks);
 }
 
 /**
