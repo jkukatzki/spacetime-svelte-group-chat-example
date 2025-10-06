@@ -12,26 +12,34 @@
     let messagesTable: ReactiveTable<Message> | null = $state(null);
     let groupChatMembersTable: ReactiveTable<GroupChatMembership> | null = $state(null);
 
+    let selectedGroupChat: GroupChat | null = $state(null);
+    
     const appContext: AppContext = getContext('AppContext');
 
     $effect(() => {
-        if (appContext.clientUser?.groupchatId && spacetimeContext.connection?.identity) {
-            messagesTable = createReactiveTable<DbConnection, Message>('message', where(eq('groupchatId', appContext.clientUser.groupchatId)));
+        if (selectedGroupChat) {
+            messagesTable = createReactiveTable<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)));
             groupChatMembersTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership', where(
-                eq('groupchatId', appContext.clientUser.groupchatId)
+                eq('groupchatId', selectedGroupChat.id)
             ));
         }
     })
 
-    let membershipsTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership');
-
+    let clientMembershipsTable: ReactiveTable<GroupChatMembership> | null = $state(null);
+    $effect(() => {
+        if (spacetimeContext.connected && spacetimeContext.connection?.identity) {
+            clientMembershipsTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership',
+                where(eq('identity', spacetimeContext.connection.identity))
+            );
+        }
+    })
 
     // Clean up reactive tables when component is destroyed
     onDestroy(() => {
         groupChatsTable.destroy();
         messagesTable?.destroy();
         groupChatMembersTable?.destroy();
-        membershipsTable?.destroy();
+        clientMembershipsTable?.destroy();
     });
 
     let createGroupChatModalOpen = $state(false);
@@ -48,7 +56,11 @@
         if (input.trim() === "") {
             return;
         }
-        spacetimeContext.connection.reducers.sendMessage(input);
+        if (!selectedGroupChat) {
+            console.error("No groupchat selected");
+            return;
+        }
+        spacetimeContext.connection.reducers.sendMessage(selectedGroupChat.id, input);
         input = ""; // Clear input after sending
     }
 
@@ -67,7 +79,7 @@
         
         <Row class="mt-4">
             <Col xs="2">
-                <!-- GROUP CHATS -->
+                <!-- GROUP CHAT SELECTION -->
                 
                 {#if spacetimeContext.connected && groupChatsTable.rows !== undefined}
                     <Button onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>New Chat +</Button>
@@ -83,7 +95,7 @@
                     </Modal>
                     {#each groupChatsTable.rows as chat}
                         <Row class="my-2">
-                            <Button onclick={() => spacetimeContext.connection?.reducers.joinGroupchat(chat.id)}>
+                            <Button outline={selectedGroupChat !== chat} onclick={() => selectedGroupChat = chat}>
                                 {chat.id}
                             </Button>
                         </Row>
@@ -93,26 +105,33 @@
                     <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
                 {/if}
             </Col>
-            <!-- MESSAGES -->
-             
+            
+            <!-- GROUP CHAT -->
             <Col xs="7">
-                {#if messagesTable}
-                    <div class="chat-header">
-                        <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
-                        <small>Total: {messagesTable.rows?.length ?? '/'} messages</small>
-                    </div>
-                    {#if messagesTable.rows !== undefined}
-                        {#each messagesTable.rows as message}
-                            <Card class="mb-2">
-                                <CardHeader>{message.sender}:</CardHeader>
-                                <CardBody>{message.text}</CardBody>
+                <!-- HEADER -->
+                {#if selectedGroupChat}
+                    <h4>Group Chat {selectedGroupChat.id}</h4>
+
+                    {#if messagesTable}
+                        <div class="chat-header">
+                            <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
+                            <small>Total: {messagesTable.rows?.length ?? '/'} messages</small>
+                        </div>
+                        {#if messagesTable.rows !== undefined}
+                            {#each messagesTable.rows as message}
+                                <Card class="mb-2">
+                                    <CardHeader>{message.sender}:</CardHeader>
+                                    <CardBody>{message.text}</CardBody>
+                                </Card>
+                            {/each}
+                        {:else}
+                            <Card>
+                                <CardBody>Loading messages...</CardBody>
                             </Card>
-                        {/each}
-                    {:else}
-                        <Card>
-                            <CardBody>Loading messages...</CardBody>
-                        </Card>
+                        {/if}
                     {/if}
+                {:else}
+                    <h3>Select a group chat!</h3>
                 {/if}
             </Col>
             <!-- USERS -->
@@ -120,12 +139,11 @@
                 {#if appContext.clientUser}
                     <Card class="border-primary">
                         <CardHeader><h6>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</h6></CardHeader>
-                        <CardBody>Groupchat: {appContext.clientUser.groupchatId}</CardBody>
                     </Card>
                 {/if}
-                {#if membershipsTable}
+                {#if clientMembershipsTable}
                     All Memberships:
-                    {#each membershipsTable.rows ?? [] as user}
+                    {#each clientMembershipsTable.rows ?? [] as user}
                         <Card class="my-2">
                             <CardHeader>...{user.identity.toHexString().slice(-6)}</CardHeader>
                             <CardBody>{user.groupchatId}</CardBody>

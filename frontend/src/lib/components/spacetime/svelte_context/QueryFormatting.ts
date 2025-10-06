@@ -1,10 +1,20 @@
-export type Value = string | number | boolean;
+import { Identity } from 'spacetimedb';
+
+export type Value = string | number | boolean | Identity;
 
 export type Expr<Column extends string> =
   | { type: 'eq'; key: Column; value: Value }
   | { type: 'neq'; key: Column; value: Value }
   | { type: 'and'; children: Expr<Column>[] }
   | { type: 'or'; children: Expr<Column>[] };
+
+// Helper function to normalize Identity to hex string
+function normalizeValue(value: Value): string | number | boolean {
+  if (value instanceof Identity) {
+    return '0x' + value.toHexString();
+  }
+  return value;
+}
 
 export const eq = <Column extends string>(
   key: Column,
@@ -52,10 +62,40 @@ export function evaluate<Column extends string, RowType = any>(
 ): boolean {
   const rowRecord = row as Record<Column, unknown>;
   switch (expr.type) {
-    case 'eq':
-      return rowRecord[expr.key] === expr.value;
-    case 'neq':
-      return rowRecord[expr.key] !== expr.value;
+    case 'eq': {
+      const rowValue = rowRecord[expr.key];
+      const exprValue = expr.value;
+      
+      // Handle Identity comparison
+      if (rowValue instanceof Identity && exprValue instanceof Identity) {
+        return rowValue.isEqual(exprValue);
+      }
+      if (rowValue instanceof Identity) {
+        return ('0x' + rowValue.toHexString()) === exprValue;
+      }
+      if (exprValue instanceof Identity) {
+        return rowValue === ('0x' + exprValue.toHexString());
+      }
+      
+      return rowValue === exprValue;
+    }
+    case 'neq': {
+      const rowValue = rowRecord[expr.key];
+      const exprValue = expr.value;
+      
+      // Handle Identity comparison
+      if (rowValue instanceof Identity && exprValue instanceof Identity) {
+        return !rowValue.isEqual(exprValue);
+      }
+      if (rowValue instanceof Identity) {
+        return ('0x' + rowValue.toHexString()) !== exprValue;
+      }
+      if (exprValue instanceof Identity) {
+        return rowValue !== ('0x' + exprValue.toHexString());
+      }
+      
+      return rowValue !== exprValue;
+    }
     case 'and':
       return expr.children.every(child => evaluate(child, row));
     case 'or':
@@ -64,6 +104,11 @@ export function evaluate<Column extends string, RowType = any>(
 }
 
 function formatValue(v: Value): string {
+  if (v instanceof Identity) {
+    const hexString = '0x' + v.toHexString();
+    return `'${hexString.replace(/'/g, "''")}'`;
+  }
+  
   switch (typeof v) {
     case 'string':
       return `'${v.replace(/'/g, "''")}'`;
@@ -71,6 +116,8 @@ function formatValue(v: Value): string {
       return Number.isFinite(v) ? String(v) : `'${String(v)}'`;
     case 'boolean':
       return v ? 'TRUE' : 'FALSE';
+    default:
+      return "''";
   }
 }
 
