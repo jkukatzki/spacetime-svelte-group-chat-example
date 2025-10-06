@@ -26,13 +26,19 @@ function snakeToCamel(tableName: string): string {
 /**
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
  * This class encapsulates table subscription logic and maintains reactive state using $state().
+ * 
+ * **Object Reference Preservation:**
+ * - For tables WITH primary keys: Rows are mutated in-place (push/splice/replace) to preserve object references
+ * - For tables WITHOUT primary keys: Rows are append-only (onInsert only), updates/deletes are not supported
+ * - This ensures that object references remain stable, allowing for reliable === comparisons in Svelte templates
  */
 export class ReactiveTable<T> {
-  rows: T[] | undefined = $state();
+  rows: T[] = $state([]);
   state: 'loading' | 'ready' = $state('loading');
   
   private tableName: string;
   private tablePropertyName: string | null = null;
+  private primaryKey: string | null = null;
   private whereClause?: Expr<keyof T & string>;
   private callbacks?: UseQueryCallbacks<T>;
   private subscription: any = undefined;
@@ -87,6 +93,35 @@ export class ReactiveTable<T> {
     return this.tablePropertyName;
   }
 
+  /**
+   * Get the primary key field name for this table from REMOTE_MODULE.
+   * Returns null if the table has no primary key.
+   * This is cached after the first lookup.
+   */
+  private getPrimaryKey(context: SpacetimeDBContext): string | null {
+    if (this.primaryKey !== null) {
+      return this.primaryKey;
+    }
+    
+    if (!context.connection) {
+      return null;
+    }
+    
+    try {
+      // Access the REMOTE_MODULE from the connection
+      const remoteModule = (context.connection as any).__remoteModule;
+      if (remoteModule && remoteModule.tables && remoteModule.tables[this.tableName]) {
+        this.primaryKey = remoteModule.tables[this.tableName].primaryKey || null;
+        return this.primaryKey;
+      }
+    } catch (e) {
+      console.warn('ReactiveTable: Could not access REMOTE_MODULE for table:', this.tableName, e);
+    }
+    
+    this.primaryKey = null;
+    return null;
+  }
+
   private setupConnectionWatcher(context: SpacetimeDBContext) {
     // Use Svelte's $effect to watch for connection changes
     $effect(() => {
@@ -109,12 +144,14 @@ export class ReactiveTable<T> {
     // Set up connection state listeners
     const onConnect = () => {
       untrack(() => {
+        this.rows = []; // Clear rows on reconnect
         this.setupSubscription(context);
       });
     };
     const onDisconnect = () => {
       untrack(() => {
         this.state = 'loading';
+        this.rows = []; // Clear rows on disconnect
       });
     };
     const onConnectError = () => {
@@ -140,7 +177,7 @@ export class ReactiveTable<T> {
     // Initial setup
     this.setupSubscription(context);
     this.setupTableEventListeners(context);
-    this.updateRows(context);
+    // Note: updateRows will be called by onApplied callback when subscription is ready
   }
 
   private setupSubscription(context: SpacetimeDBContext) {
@@ -163,8 +200,8 @@ export class ReactiveTable<T> {
       this.subscription = context.connection
         .subscriptionBuilder()
         .onApplied(() => {
+          // Subscription is ready - onInsert callbacks have fired for all existing rows
           this.state = 'ready';
-          this.updateRows(context);
         })
         .subscribe(query);
     }
@@ -183,6 +220,7 @@ export class ReactiveTable<T> {
     }
 
     const table = context.connection.db[propertyName] as any;
+    const primaryKey = this.getPrimaryKey(context);
     
     if (table && 'onInsert' in table) {
       const onInsert = (ctx: any, row: T) => {
@@ -194,11 +232,16 @@ export class ReactiveTable<T> {
         // Call user callback
         this.callbacks?.onInsert?.(row);
         
-        // Update reactive state
-        this.updateRows(context);
+        // Add to array instead of replacing entire array
+        this.rows.push(row);
       };
 
       const onDelete = (ctx: any, row: T) => {
+        // Only handle deletes for tables with primary keys
+        if (!primaryKey) {
+          return;
+        }
+        
         // Filter by where clause if provided
         if (this.whereClause && !evaluate(this.whereClause, row)) {
           return;
@@ -207,41 +250,66 @@ export class ReactiveTable<T> {
         // Call user callback
         this.callbacks?.onDelete?.(row);
         
-        // Update reactive state
-        this.updateRows(context);
+        // Remove from array by finding the matching primary key
+        const pkValue = (row as any)[primaryKey];
+        const index = this.rows.findIndex(r => (r as any)[primaryKey] === pkValue);
+        if (index !== -1) {
+          this.rows.splice(index, 1);
+        }
       };
 
       const onUpdate = (ctx: any, oldRow: T, newRow: T) => {
+        // Only handle updates for tables with primary keys
+        if (!primaryKey) {
+          return;
+        }
+        
         // Determine membership changes based on where clause
         const change = classifyMembership(this.whereClause, oldRow, newRow);
         
         if (change === 'enter') {
           this.callbacks?.onInsert?.(newRow);
+          // Add the new row to the array
+          this.rows.push(newRow);
         } else if (change === 'leave') {
           this.callbacks?.onDelete?.(oldRow);
+          // Remove the old row from the array
+          const pkValue = (oldRow as any)[primaryKey];
+          const index = this.rows.findIndex(r => (r as any)[primaryKey] === pkValue);
+          if (index !== -1) {
+            this.rows.splice(index, 1);
+          }
         } else if (change === 'stayIn') {
           this.callbacks?.onUpdate?.(oldRow, newRow);
+          // Replace the old row with the new row in-place
+          const pkValue = (oldRow as any)[primaryKey];
+          const index = this.rows.findIndex(r => (r as any)[primaryKey] === pkValue);
+          if (index !== -1) {
+            this.rows[index] = newRow;
+          }
         }
         // 'stayOut' requires no action
-
-        if (change !== 'stayOut') {
-          this.updateRows(context);
-        }
       };
 
       table.onInsert(onInsert);
-      table.onDelete(onDelete);
-      if ('onUpdate' in table) {
-        table.onUpdate(onUpdate);
+      
+      // Only set up onDelete and onUpdate listeners if table has a primary key
+      if (primaryKey) {
+        table.onDelete(onDelete);
+        if ('onUpdate' in table) {
+          table.onUpdate(onUpdate);
+        }
       }
 
       // Store cleanup functions
       this.eventListeners.push(() => {
         if ('removeOnInsert' in table) {
           table.removeOnInsert(onInsert);
-          table.removeOnDelete(onDelete);
-          if ('removeOnUpdate' in table) {
-            table.removeOnUpdate(onUpdate);
+          if (primaryKey) {
+            table.removeOnDelete(onDelete);
+            if ('removeOnUpdate' in table) {
+              table.removeOnUpdate(onUpdate);
+            }
           }
         }
       });
