@@ -4,7 +4,7 @@
 	import { createReactiveTable, type ReactiveTable, eq, where } from "./spacetime/svelte_context";
 	import { DbConnection, GroupChat, GroupChatMembership, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
-	import { getContext, onDestroy } from "svelte";
+	import { getContext, onDestroy, untrack } from "svelte";
 	import type { AppContext } from "$lib/AppContext.svelte";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
@@ -18,6 +18,7 @@
 
     $effect(() => {
         if (selectedGroupChat) {
+            untrack(() => {messagesTable?.destroy();});
             messagesTable = createReactiveTable<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)));
             groupChatMembersTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership', where(
                 eq('groupchatId', selectedGroupChat.id)
@@ -95,7 +96,10 @@
                     </Modal>
                     {#each groupChatsTable.rows as chat}
                         <Row class="my-2">
-                            <Button outline={selectedGroupChat !== chat} onclick={() => selectedGroupChat = chat}>
+                            <Button outline={selectedGroupChat !== chat} onclick={() => {
+                                console.log('GroupChat: Button clicked to select groupchat:', chat.id);
+                                selectedGroupChat = chat;
+                            }}>
                                 {chat.id}
                             </Button>
                         </Row>
@@ -111,24 +115,31 @@
                 <!-- HEADER -->
                 {#if selectedGroupChat}
                     <h4>Group Chat {selectedGroupChat.id}</h4>
-
-                    {#if messagesTable}
-                        <div class="chat-header">
-                            <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
-                            <small>Total: {messagesTable.rows?.length ?? '/'} messages</small>
-                        </div>
-                        {#if messagesTable.rows !== undefined}
-                            {#each messagesTable.rows as message}
-                                <Card class="mb-2">
-                                    <CardHeader>{message.sender}:</CardHeader>
-                                    <CardBody>{message.text}</CardBody>
-                                </Card>
-                            {/each}
+                    {#if clientMembershipsTable?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
+                        {#if messagesTable}
+                            <div class="chat-header">
+                                <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
+                                <small>Total: {messagesTable.rows?.length ?? '/'} messages</small>
+                            </div>
+                            {#if messagesTable.rows !== undefined}
+                                {#each messagesTable.rows as message}
+                                    <Card class="mb-2">
+                                        <CardHeader>{message.sender}:</CardHeader>
+                                        <CardBody>{message.text}</CardBody>
+                                    </Card>
+                                {/each}
+                            {/if}
                         {:else}
                             <Card>
                                 <CardBody>Loading messages...</CardBody>
                             </Card>
                         {/if}
+                    {:else}
+                        <Button color="primary" class="mb-2" onclick={() => {
+                            if (spacetimeContext.connection && selectedGroupChat) {
+                                spacetimeContext.connection.reducers.joinGroupchat(selectedGroupChat.id);
+                            }
+                        }}>Join Chat</Button>
                     {/if}
                 {:else}
                     <h3>Select a group chat!</h3>
