@@ -18,7 +18,6 @@
 
     $effect(() => {
         if (selectedGroupChat) {
-            untrack(() => {messagesTable?.destroy();});
             messagesTable = createReactiveTable<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)));
             groupChatMembersTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership', where(
                 eq('groupchatId', selectedGroupChat.id)
@@ -34,14 +33,6 @@
             );
         }
     })
-
-    // Clean up reactive tables when component is destroyed
-    onDestroy(() => {
-        groupChatsTable.destroy();
-        messagesTable?.destroy();
-        groupChatMembersTable?.destroy();
-        clientMembershipsTable?.destroy();
-    });
 
     let createGroupChatModalOpen = $state(false);
     let createGroupChatName = $state("");

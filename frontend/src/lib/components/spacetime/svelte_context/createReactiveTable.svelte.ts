@@ -1,4 +1,5 @@
 import { onMount, onDestroy, untrack } from 'svelte';
+import { createSubscriber } from 'svelte/reactivity';
 import { getSpacetimeContext, SpacetimeDBContext } from '../SpacetimeContext.svelte';
 import type { DbConnectionImpl } from 'spacetimedb';
 import { evaluate, toQueryString, type Expr, type Value } from './QueryFormatting';
@@ -27,13 +28,18 @@ function snakeToCamel(tableName: string): string {
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
  * This class encapsulates table subscription logic and maintains reactive state using $state().
  * 
+ * **Automatic Cleanup:**
+ * - Uses Svelte's createSubscriber to automatically clean up when effects are destroyed
+ * - No need to manually call .destroy() when reassigning or switching between instances
+ * - Cleanup happens automatically when the containing effect re-runs or is destroyed
+ * 
  * **Object Reference Preservation:**
  * - For tables WITH primary keys: Rows are mutated in-place (push/splice/replace) to preserve object references
  * - For tables WITHOUT primary keys: Rows are append-only (onInsert only), updates/deletes are not supported
  * - This ensures that object references remain stable, allowing for reliable === comparisons in Svelte templates
  */
 export class ReactiveTable<T> {
-  rows: T[] = $state([]);
+  #actualRows: T[] = $state([]);
   state: 'loading' | 'ready' = $state('loading');
   
   private tableName: string;
@@ -43,6 +49,7 @@ export class ReactiveTable<T> {
   private callbacks?: UseQueryCallbacks<T>;
   private subscription: any = undefined;
   private eventListeners: (() => void)[] = [];
+  private subscribe: () => void;
 
   constructor(
     tableName: string,
@@ -52,6 +59,16 @@ export class ReactiveTable<T> {
     this.tableName = tableName;
     this.whereClause = whereClause;
     this.callbacks = callbacks;
+    
+    // Set up automatic cleanup using createSubscriber
+    this.subscribe = createSubscriber(() => {
+      // This function is called when the first effect reads this.rows
+      return () => {
+        // This cleanup function is called when all effects are destroyed
+        this.cleanup();
+      };
+    });
+
     const context = getSpacetimeContext();
     // Get SpacetimeDB client from context internally
     try {
@@ -72,6 +89,20 @@ export class ReactiveTable<T> {
     }
 
     this.initialize(context);
+  }
+
+  /**
+   * Reactive rows property that triggers automatic cleanup registration.
+   * Accessing this property registers the current effect for cleanup.
+   */
+  get rows(): T[] {
+    // Register this access with the subscriber
+    this.subscribe();
+    return this.#actualRows;
+  }
+
+  private set rows(newRows: T[]) {
+    this.#actualRows = newRows;
   }
 
   /**
@@ -233,7 +264,7 @@ export class ReactiveTable<T> {
         this.callbacks?.onInsert?.(row);
         
         // Add to array instead of replacing entire array
-        this.rows.push(row);
+        this.#actualRows.push(row);
       };
 
       const onDelete = (ctx: any, row: T) => {
@@ -252,9 +283,9 @@ export class ReactiveTable<T> {
         
         // Remove from array by finding the matching primary key
         const pkValue = (row as any)[primaryKey];
-        const index = this.rows.findIndex(r => (r as any)[primaryKey] === pkValue);
+        const index = this.#actualRows.findIndex(r => (r as any)[primaryKey] === pkValue);
         if (index !== -1) {
-          this.rows.splice(index, 1);
+          this.#actualRows.splice(index, 1);
         }
       };
 
@@ -270,22 +301,22 @@ export class ReactiveTable<T> {
         if (change === 'enter') {
           this.callbacks?.onInsert?.(newRow);
           // Add the new row to the array
-          this.rows.push(newRow);
+          this.#actualRows.push(newRow);
         } else if (change === 'leave') {
           this.callbacks?.onDelete?.(oldRow);
           // Remove the old row from the array
           const pkValue = (oldRow as any)[primaryKey];
-          const index = this.rows.findIndex(r => (r as any)[primaryKey] === pkValue);
+          const index = this.#actualRows.findIndex(r => (r as any)[primaryKey] === pkValue);
           if (index !== -1) {
-            this.rows.splice(index, 1);
+            this.#actualRows.splice(index, 1);
           }
         } else if (change === 'stayIn') {
           this.callbacks?.onUpdate?.(oldRow, newRow);
           // Replace the old row with the new row in-place
           const pkValue = (oldRow as any)[primaryKey];
-          const index = this.rows.findIndex(r => (r as any)[primaryKey] === pkValue);
+          const index = this.#actualRows.findIndex(r => (r as any)[primaryKey] === pkValue);
           if (index !== -1) {
-            this.rows[index] = newRow;
+            this.#actualRows[index] = newRow;
           }
         }
         // 'stayOut' requires no action
@@ -349,16 +380,32 @@ export class ReactiveTable<T> {
 
   /**
    * Clean up all subscriptions and event listeners.
-   * Call this when the component is destroyed or when you no longer need the reactive table.
+   * This is called automatically when effects are destroyed.
+   * Can also be called manually when you no longer need the reactive table.
    */
-  destroy() {
+  cleanup() {
+    console.log('ReactiveTable: Cleaning up table:', this.tableName);
+    
     if (this.subscription) {
       this.subscription.unsubscribe();
+      this.subscription = undefined;
     }
     
     // Clean up all event listeners
-    this.eventListeners.forEach(cleanup => cleanup());
+    this.eventListeners.forEach(cleanupFn => cleanupFn());
     this.eventListeners = [];
+    
+    // Reset state
+    this.state = 'loading';
+    this.rows = [];
+  }
+
+  /**
+   * Legacy destroy method for backward compatibility.
+   * Calls cleanup() internally.
+   */
+  destroy() {
+    this.cleanup();
   }
 
   /**
