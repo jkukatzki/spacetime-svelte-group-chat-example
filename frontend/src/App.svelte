@@ -5,18 +5,18 @@
 	import { Styles } from "@sveltestrap/sveltestrap";
 	import { onDestroy, setContext } from "svelte";
 	import { getSpacetimeContext } from "$lib/components/spacetime/SpacetimeContext.svelte";
-	import { createReactiveTable, type ReactiveTable } from "$lib/components/spacetime/svelte_context/createReactiveTable.svelte";
+	import { STQuery } from "$lib/components/spacetime/svelte_context/STQuery.svelte";
 	import { AppContext } from "$lib/AppContext.svelte";
 
     const spacetimeContext = getSpacetimeContext<DbConnection>();
 
     
 
-    const appContext = new AppContext(createReactiveTable<DbConnection, User>('user'));
+    const appContext = new AppContext(new STQuery<DbConnection, User>('user'));
 
     setContext('AppContext', appContext);
 
-    let usersTable: ReactiveTable<User> = createReactiveTable<DbConnection, User>('user', {
+    let usersTable: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user', undefined, {
         onInsert: (user) => {
             if (spacetimeContext.connection?.identity && user.identity.isEqual(spacetimeContext.connection.identity)) {
                 appContext.clientUser = user;
@@ -31,7 +31,7 @@
     );
 
     onDestroy(() => {
-        usersTable.destroy();
+        usersTable.cleanup();
     });
     
 </script>

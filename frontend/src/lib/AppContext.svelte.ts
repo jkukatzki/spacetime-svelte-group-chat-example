@@ -1,10 +1,10 @@
-import type { User } from "./components/spacetime/module_bindings";
-import type { ReactiveTable } from "./components/spacetime/svelte_context/createReactiveTable.svelte";
+import type { User, DbConnection } from "./components/spacetime/module_bindings";
+import type { STQuery } from "./components/spacetime/svelte_context/STQuery.svelte";
 
 export class AppContext {
         clientUser = $state<User | null>(null);
-        users: ReactiveTable<User>;
-        constructor(users: ReactiveTable<User>) {
+        users: STQuery<DbConnection, User>;
+        constructor(users: STQuery<DbConnection, User>) {
                 this.users = users;
         }
 }

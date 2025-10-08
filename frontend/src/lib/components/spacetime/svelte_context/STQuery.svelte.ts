@@ -38,25 +38,29 @@ function snakeToCamel(tableName: string): string {
  * - For tables WITHOUT primary keys: Rows are append-only (onInsert only), updates/deletes are not supported
  * - This ensures that object references remain stable, allowing for reliable === comparisons in Svelte templates
  */
-export class ReactiveTable<T> {
-  #actualRows: T[] = $state([]);
+export class STQuery<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>
+> {
+  #actualRows: RowType[] = $state([]);
   state: 'loading' | 'ready' = $state('loading');
   
   private tableName: string;
   private tablePropertyName: string | null = null;
   private primaryKey: string | null = null;
-  private whereClause?: Expr<keyof T & string>;
-  private callbacks?: UseQueryCallbacks<T>;
+  private whereClause?: Expr<keyof RowType & string>;
+  private callbacks?: UseQueryCallbacks<RowType>;
   private subscription: any = undefined;
   private eventListeners: (() => void)[] = [];
   private subscribe: () => void;
 
   constructor(
-    tableName: string,
-    whereClause?: Expr<keyof T & string>,
-    callbacks?: UseQueryCallbacks<T>
+    tableName: TableName,
+    whereClause?: Expr<keyof RowType & string>,
+    callbacks?: UseQueryCallbacks<RowType>
   ) {
-    this.tableName = tableName;
+    this.tableName = tableName as string;
     this.whereClause = whereClause;
     this.callbacks = callbacks;
     
@@ -95,13 +99,13 @@ export class ReactiveTable<T> {
    * Reactive rows property that triggers automatic cleanup registration.
    * Accessing this property registers the current effect for cleanup.
    */
-  get rows(): T[] {
+  get rows(): RowType[] {
     // Register this access with the subscriber
     this.subscribe();
     return this.#actualRows;
   }
 
-  private set rows(newRows: T[]) {
+  private set rows(newRows: RowType[]) {
     this.#actualRows = newRows;
   }
 
@@ -254,7 +258,7 @@ export class ReactiveTable<T> {
     const primaryKey = this.getPrimaryKey(context);
     
     if (table && 'onInsert' in table) {
-      const onInsert = (ctx: any, row: T) => {
+      const onInsert = (ctx: any, row: RowType) => {
         // Filter by where clause if provided
         if (this.whereClause && !evaluate(this.whereClause, row)) {
           return;
@@ -267,7 +271,7 @@ export class ReactiveTable<T> {
         this.#actualRows.push(row);
       };
 
-      const onDelete = (ctx: any, row: T) => {
+      const onDelete = (ctx: any, row: RowType) => {
         // Only handle deletes for tables with primary keys
         if (!primaryKey) {
           return;
@@ -289,7 +293,7 @@ export class ReactiveTable<T> {
         }
       };
 
-      const onUpdate = (ctx: any, oldRow: T, newRow: T) => {
+      const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
         // Only handle updates for tables with primary keys
         if (!primaryKey) {
           return;
@@ -362,7 +366,7 @@ export class ReactiveTable<T> {
 
     const table = context.connection.db[propertyName] as any;
     if (table && 'iter' in table) {
-      const allRows = table.iter() as T[];
+      const allRows = table.iter() as RowType[];
       this.rows = this.whereClause
         ? allRows.filter(row => evaluate(this.whereClause!, row))
         : allRows;
@@ -412,7 +416,7 @@ export class ReactiveTable<T> {
    * Update the where clause and refilter the data.
    * This allows dynamic filtering of the reactive table.
    */
-  setWhereClause(context: SpacetimeDBContext, whereClause?: Expr<keyof T & string>) {
+  setWhereClause(context: SpacetimeDBContext, whereClause?: Expr<keyof RowType & string>) {
     this.whereClause = whereClause;
     this.setupSubscription(context);
     this.updateRows(context);
@@ -478,95 +482,7 @@ type AssertRowTypeMatches<
   ? unknown
   : { error: 'RowType does not match table row type'; expected: ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>; got: RowType };
 
-/**
- * Factory function to create a ReactiveTable instance with full type safety.
- * 
- * Provides validation that:
- * 1. The table name exists (as either camelCase property or snake_case SQL name)
- * 2. The RowType matches the actual row type of that table
- * 
- * Unlike the React version, this accepts BOTH camelCase AND snake_case table names:
- * - createReactiveTable<DbConnection, Message>('message') ✅
- * - createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership') ✅
- * - createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership') ✅
- * 
- * This will throw a TypeScript error for:
- * - createReactiveTable<DbConnection, GroupChatMembership>('message') ❌ Wrong type!
- * - createReactiveTable<DbConnection, Message>('invalid_table') ❌ Table doesn't exist!
- * 
- * @template DbConnection The type of the SpacetimeDB connection with typed db property.
- * @template RowType The type of the table row (must match the table's actual row type).
- * 
- * @example
- * ```svelte
- * <script>
- *   import { createReactiveTable, eq, where } from './svelte_context';
- *   import type { DbConnection, Message, GroupChatMembership } from '../module_bindings';
- *   
- *   // ✅ All valid - accepts both camelCase and snake_case
- *   const messageTable = createReactiveTable<DbConnection, Message>('message');
- *   const members1 = createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership');
- *   const members2 = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership');
- *   
- *   // ❌ TypeScript error: GroupChatMembership doesn't match Message
- *   const badTable = createReactiveTable<DbConnection, GroupChatMembership>('message');
- * </script>
- * ```
- */
 
-// Overload with where clause
-export function createReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType extends Record<string, any>,
-  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
->(
-  tableName: TableName,
-  where: Expr<ColumnsFromRow<RowType>> & AssertRowTypeMatches<DbConnection, RowType, TableName>,
-  callbacks?: UseQueryCallbacks<RowType>
-): ReactiveTable<RowType>;
-
-// Overload without where clause
-export function createReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType extends Record<string, any>,
-  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
->(
-  tableName: TableName & AssertRowTypeMatches<DbConnection, RowType, TableName>,
-  callbacks?: UseQueryCallbacks<RowType>
-): ReactiveTable<RowType>;
-
-// Implementation
-export function createReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType extends Record<string, any>,
->(
-  tableName: string,
-  whereClauseOrCallbacks?: Expr<ColumnsFromRow<RowType>> | UseQueryCallbacks<RowType>,
-  callbacks?: UseQueryCallbacks<RowType>
-): ReactiveTable<RowType> {
-  let whereClause: Expr<ColumnsFromRow<RowType>> | undefined;
-  let actualCallbacks: UseQueryCallbacks<RowType> | undefined;
-  
-  // Handle different parameter combinations
-  if (whereClauseOrCallbacks) {
-    if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
-      // First param is where clause
-      whereClause = whereClauseOrCallbacks as Expr<ColumnsFromRow<RowType>>;
-      actualCallbacks = callbacks;
-    } else {
-      // First param is callbacks
-      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<RowType>;
-    }
-  }
-
-  return new ReactiveTable<RowType>(tableName as string, whereClause as any, actualCallbacks);
-}
-
-/**
- * Compatibility function for the original getReactiveTable API.
- * This maintains backward compatibility while providing the same functionality.
- * For new code, consider using createReactiveTable which returns a ReactiveTable instance.
- */
 
 function classifyMembership<
   Col extends string,

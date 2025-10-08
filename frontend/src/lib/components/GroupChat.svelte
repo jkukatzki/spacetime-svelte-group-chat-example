@@ -1,34 +1,34 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, colorMode, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
-	import { createReactiveTable, type ReactiveTable, eq, where } from "./spacetime/svelte_context";
+	import { STQuery, eq, where } from "./spacetime/svelte_context";
 	import { DbConnection, GroupChat, GroupChatMembership, Message, SendMessage, User } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { getContext, onDestroy, untrack } from "svelte";
 	import type { AppContext } from "$lib/AppContext.svelte";
 
     let spacetimeContext = getSpacetimeContext<DbConnection>();
-    let groupChatsTable: ReactiveTable<GroupChat> = createReactiveTable<DbConnection, GroupChat>('groupchat');
-    let messagesTable: ReactiveTable<Message> | null = $state(null);
-    let groupChatMembersTable: ReactiveTable<GroupChatMembership> | null = $state(null);
-
+    let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
+    let messages: STQuery<DbConnection, Message> | null = $state(null);
+    let groupChatMembers: STQuery<DbConnection, GroupChatMembership> | null = $state(null);
+        
     let selectedGroupChat: GroupChat | null = $state(null);
     
     const appContext: AppContext = getContext('AppContext');
 
     $effect(() => {
         if (selectedGroupChat) {
-            messagesTable = createReactiveTable<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)));
-            groupChatMembersTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchatMembership', where(
+            messages = new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)));
+            groupChatMembers = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(
                 eq('groupchatId', selectedGroupChat.id)
             ));
         }
     })
 
-    let clientMembershipsTable: ReactiveTable<GroupChatMembership> | null = $state(null);
+    let clientMemberships: STQuery<DbConnection, GroupChatMembership> | null = $state(null);
     $effect(() => {
         if (spacetimeContext.connected && spacetimeContext.connection?.identity) {
-            clientMembershipsTable = createReactiveTable<DbConnection, GroupChatMembership>('groupchat_membership',
+            clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchat_membership',
                 where(eq('identity', spacetimeContext.connection.identity))
             );
         }
@@ -73,7 +73,7 @@
             <Col xs="2">
                 <!-- GROUP CHAT SELECTION -->
                 
-                {#if spacetimeContext.connected && groupChatsTable.rows !== undefined}
+                {#if spacetimeContext.connected && groupChats.rows !== undefined}
                     <Button onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>New Chat +</Button>
                     <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
                         <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
@@ -85,7 +85,7 @@
                             }
                         }}>Create</Button>
                     </Modal>
-                    {#each groupChatsTable.rows as chat}
+                    {#each groupChats.rows as chat}
                         <Row class="my-2">
                             <Button outline={selectedGroupChat !== chat} onclick={() => {
                                 console.log('GroupChat: Button clicked to select groupchat:', chat.id);
@@ -106,14 +106,14 @@
                 <!-- HEADER -->
                 {#if selectedGroupChat}
                     <h4>Group Chat {selectedGroupChat.id}</h4>
-                    {#if clientMembershipsTable?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
-                        {#if messagesTable}
+                    {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
+                        {#if messages}
                             <div class="chat-header">
-                                <h5>Messages ({messagesTable.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
-                                <small>Total: {messagesTable.rows?.length ?? '/'} messages</small>
+                                <h5>Messages ({messages.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
+                                <small>Total: {messages.rows?.length ?? '/'} messages</small>
                             </div>
-                            {#if messagesTable.rows !== undefined}
-                                {#each messagesTable.rows as message}
+                            {#if messages.rows !== undefined}
+                                {#each messages.rows as message}
                                     <Card class="mb-2">
                                         <CardHeader>{message.sender}:</CardHeader>
                                         <CardBody>{message.text}</CardBody>
@@ -143,9 +143,9 @@
                         <CardHeader><h6>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</h6></CardHeader>
                     </Card>
                 {/if}
-                {#if clientMembershipsTable}
+                {#if clientMemberships}
                     All Memberships:
-                    {#each clientMembershipsTable.rows ?? [] as user}
+                    {#each clientMemberships.rows ?? [] as user}
                         <Card class="my-2">
                             <CardHeader>...{user.identity.toHexString().slice(-6)}</CardHeader>
                             <CardBody>{user.groupchatId}</CardBody>
