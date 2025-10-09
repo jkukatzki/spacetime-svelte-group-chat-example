@@ -43,7 +43,7 @@
         <!-- Connection Status Bar -->
         <div class="connection-status {spacetimeContext.connected ? 'ready' : 'connecting'}">
             {#if spacetimeContext.connected}
-                🟢 Connected to SpacetimeDB {spacetimeContext.connection.identity?.toHexString()}
+                🟢 Connected to SpacetimeDB
             {:else}
                 🟡 Connecting to SpacetimeDB...
             {/if}
@@ -91,14 +91,14 @@
                 </Container>
             </Col>
             <!-- GROUP CHAT -->
-            <Col xs="7" class="border rounded">
+            <Col xs="7" class="border rounded p-3">
                 <!-- HEADER -->
                 {#if selectedGroupChat}
                     <h4>Group Chat {selectedGroupChat.id}</h4>
                     {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
                         {#if messages}
                             <div class="chat-header">
-                                <h5>Messages ({messages.state === 'ready' ? 'Connected' : 'Loading...'})</h5>
+                                <h5>{messages.state === 'ready' ? '' : 'Loading...'}</h5>
                                 <small>Total: {messages.rows?.length ?? '/'} messages</small>
                             </div>
                             {#if messages.rows !== undefined}
@@ -133,25 +133,25 @@
                         <CardHeader><h6>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</h6></CardHeader>
                     </Card>
                 {/if}
-                {#if clientMemberships}
-                    All Memberships:
-                    {#each clientMemberships.rows ?? [] as user}
-                        <Card class="my-2">
-                            <CardHeader>...{user.identity.toHexString().slice(-6)}</CardHeader>
-                            <CardBody>{user.groupchatId}</CardBody>
-                        </Card>
-                    {/each}
-                {/if}
+                <h6 class="mt-3">All Users:</h6>
                 {#if appContext.users}
-                    {#each appContext.users.rows ?? [] as user}
-                        <Badge pill={true} color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]} class="me-1" style="padding-left: 0.2em; max-width: 1em;">{user.name ? user.name[0] : user.identity.toHexString().at(-1)}</Badge>
-                    {/each}
+                    <div class="ms-2">
+                        {#each appContext.users.rows ?? [] as user}
+                            <Badge 
+                                pill={true}
+                                color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]}
+                                class="me-1"
+                            >
+                                {user.name ? user.name[0] : user.identity.toHexString().slice(-6)}
+                            </Badge>
+                        {/each}
+                    </div>
                 {/if}
             </Col>
         </Row>
     </Container>
 
-    <InputGroup class="fixed-bottom w-50 mx-auto">
+    <InputGroup class="fixed-bottom mb-3 w-50 mx-auto">
         <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!spacetimeContext.connected} />
         <Button onclick={sendMessage} disabled={!spacetimeContext.connected}>Send</Button>
     </InputGroup>
