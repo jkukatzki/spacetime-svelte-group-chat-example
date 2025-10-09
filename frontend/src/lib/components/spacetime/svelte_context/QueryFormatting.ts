@@ -1,6 +1,6 @@
 import { Identity } from 'spacetimedb';
 
-export type Value = string | number | boolean | Identity;
+export type Value = string | number | boolean | Identity | null;
 
 export type Expr<Column extends string> =
   | { type: 'eq'; key: Column; value: Value }
@@ -8,10 +8,15 @@ export type Expr<Column extends string> =
   | { type: 'and'; children: Expr<Column>[] }
   | { type: 'or'; children: Expr<Column>[] };
 
+// Helper function to convert Identity to hex string with 0x prefix
+function identityToHexString(identity: Identity): string {
+  return '0x' + identity.toHexString();
+}
+
 // Helper function to normalize Identity to hex string
-function normalizeValue(value: Value): string | number | boolean {
+function normalizeValue(value: Value): Value {
   if (value instanceof Identity) {
-    return '0x' + value.toHexString();
+    return identityToHexString(value);
   }
   return value;
 }
@@ -71,10 +76,10 @@ export function evaluate<Column extends string, RowType = any>(
         return rowValue.isEqual(exprValue);
       }
       if (rowValue instanceof Identity) {
-        return ('0x' + rowValue.toHexString()) === exprValue;
+        return identityToHexString(rowValue) === exprValue;
       }
       if (exprValue instanceof Identity) {
-        return rowValue === ('0x' + exprValue.toHexString());
+        return rowValue === identityToHexString(exprValue);
       }
       
       return rowValue === exprValue;
@@ -88,10 +93,10 @@ export function evaluate<Column extends string, RowType = any>(
         return !rowValue.isEqual(exprValue);
       }
       if (rowValue instanceof Identity) {
-        return ('0x' + rowValue.toHexString()) !== exprValue;
+        return identityToHexString(rowValue) !== exprValue;
       }
       if (exprValue instanceof Identity) {
-        return rowValue !== ('0x' + exprValue.toHexString());
+        return rowValue !== identityToHexString(exprValue);
       }
       
       return rowValue !== exprValue;
@@ -105,7 +110,7 @@ export function evaluate<Column extends string, RowType = any>(
 
 function formatValue(v: Value): string {
   if (v instanceof Identity) {
-    const hexString = '0x' + v.toHexString();
+    const hexString = identityToHexString(v);
     return `'${hexString.replace(/'/g, "''")}'`;
   }
   

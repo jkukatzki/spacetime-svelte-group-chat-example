@@ -10,8 +10,6 @@
 
     const spacetimeContext = getSpacetimeContext<DbConnection>();
 
-    
-
     const appContext = new AppContext(new STQuery<DbConnection, User>('user'));
 
     setContext('AppContext', appContext);

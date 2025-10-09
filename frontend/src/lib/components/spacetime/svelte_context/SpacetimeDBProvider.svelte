@@ -22,24 +22,23 @@
   }: Props<any, any, any> = $props();
 
   const spacetimeContext: SpacetimeDBContext = new SpacetimeDBContext(
-    undefined,
-    undefined,
+    connectionBuilder.build()
   );
 
   // Set the context for child components IMMEDIATELY (not in onMount)
   setContext(SPACETIMEDB_CONTEXT_KEY, spacetimeContext);
 
   onMount(() => {
-    try {
-      // Build the connection when component mounts
-      spacetimeContext.connection = connectionBuilder.build();
-      
-      // Set up connection event handlers if available
+    try {      
+      // Set up connection event handlers if available - spacetime typed client defines these as private, which is why we force "cast" to any here
       const clientWithEvents = spacetimeContext.connection as any;
       if (clientWithEvents.onConnect) {
         clientWithEvents.onConnect(() => {
           spacetimeContext.connected = true;
           spacetimeContext.error = undefined;
+          if (spacetimeContext.connection.identity) {
+            spacetimeContext.identity = spacetimeContext.connection.identity;
+          }
         });
       }
       
@@ -64,7 +63,7 @@
   onDestroy(() => {
     // Connection will clean itself up automatically when component is destroyed
     spacetimeContext.connected = false;
-    spacetimeContext.connection = undefined;
+    spacetimeContext.connection.disconnect();
   });
 </script>
 

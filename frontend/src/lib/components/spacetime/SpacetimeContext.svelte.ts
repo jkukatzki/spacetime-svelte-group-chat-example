@@ -1,16 +1,16 @@
 import { getContext, hasContext, setContext } from 'svelte';
-import type { DbConnectionImpl } from 'spacetimedb';
+import type { DbConnectionImpl, Identity } from 'spacetimedb';
 
 export const SPACETIMEDB_CONTEXT_KEY = Symbol('spacetimedb');
 
 export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnectionImpl> {
-  connection: DbConnection | undefined = $state();
+  connection: DbConnection;
   error: Error | undefined = $state(undefined);
   connected: boolean = $state(false);
+  identity: Identity | null = $state(null);
 
-  constructor(connection?: DbConnection, error?: Error) {
-    this.connection = connection;
-    this.error = error;
+  constructor(connection: DbConnection) {
+    this.connection = $state<DbConnection>(connection);
   }
 }
 

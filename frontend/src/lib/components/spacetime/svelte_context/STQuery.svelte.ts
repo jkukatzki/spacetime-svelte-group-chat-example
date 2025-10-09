@@ -56,11 +56,11 @@ export class STQuery<
   private subscribe: () => void;
 
   constructor(
-    tableName: TableName,
+    tableName: TableName & AssertRowTypeMatches<DbConnection, RowType, TableName>,
     whereClause?: Expr<keyof RowType & string>,
     callbacks?: UseQueryCallbacks<RowType>
   ) {
-    this.tableName = tableName as string;
+    this.tableName = tableName;
     this.whereClause = whereClause;
     this.callbacks = callbacks;
     
@@ -78,7 +78,7 @@ export class STQuery<
     try {
       
       
-      if (!context.connection) {
+      if (!context.connection || !context.connected) {
         console.log('ReactiveTable: Connection not available yet for table:', this.tableName);
         // Set up a watcher for when connection becomes available
         this.setupConnectionWatcher(context);
@@ -160,7 +160,7 @@ export class STQuery<
   private setupConnectionWatcher(context: SpacetimeDBContext) {
     // Use Svelte's $effect to watch for connection changes
     $effect(() => {
-      if (context.connection) {
+      if (context.connection && context.connected) {
         // Use untrack to prevent reactive updates in initialize from causing loops
         untrack(() => {
           this.initialize(context);
@@ -170,9 +170,9 @@ export class STQuery<
   }
 
   private initialize(context: SpacetimeDBContext) {
-    // Don't initialize if client isn't ready yet
-    if (!context.connection) {
-      console.log('ReactiveTable: Client not ready for table:', this.tableName);
+    // Don't initialize if client isn't ready yet or not connected
+    if (!context.connection || !context.connected) {
+      console.log('ReactiveTable: Client not ready or not connected for table:', this.tableName);
       return;
     }
 
@@ -216,9 +216,9 @@ export class STQuery<
   }
 
   private setupSubscription(context: SpacetimeDBContext) {
-    // Don't set up subscription if client isn't ready
-    if (!context.connection) {
-      console.log('ReactiveTable: No client available for subscription setup:', this.tableName);
+    // Don't set up subscription if client isn't ready or not connected
+    if (!context.connection || !context.connected) {
+      console.log('ReactiveTable: No client available or not connected for subscription setup:', this.tableName);
       return;
     }
 
@@ -482,7 +482,67 @@ type AssertRowTypeMatches<
   ? unknown
   : { error: 'RowType does not match table row type'; expected: ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>; got: RowType };
 
+/**
+ * Type alias for backward compatibility.
+ * Use STQuery class directly instead.
+ * @deprecated Use STQuery class instead
+ */
+export type ReactiveTable<T extends Record<string, any>> = STQuery<any, T>;
 
+/**
+ * Legacy factory function for backward compatibility.
+ * @deprecated Use new STQuery<DbConnection, RowType>('table_name', ...) instead
+ */
+export function createReactiveTable<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
+>(
+  tableName: TableName,
+  where: Expr<ColumnsFromRow<RowType>> & AssertRowTypeMatches<DbConnection, RowType, TableName>,
+  callbacks?: UseQueryCallbacks<RowType>
+): STQuery<DbConnection, RowType>;
+
+export function createReactiveTable<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
+>(
+  tableName: TableName & AssertRowTypeMatches<DbConnection, RowType, TableName>,
+  callbacks?: UseQueryCallbacks<RowType>
+): STQuery<DbConnection, RowType>;
+
+export function createReactiveTable<
+  DbConnection extends DbConnectionImpl,
+  RowType extends Record<string, any>,
+>(
+  tableName: string,
+  whereClauseOrCallbacks?: Expr<ColumnsFromRow<RowType>> | UseQueryCallbacks<RowType>,
+  callbacks?: UseQueryCallbacks<RowType>
+): STQuery<DbConnection, RowType> {
+  let whereClause: Expr<ColumnsFromRow<RowType>> | undefined;
+  let actualCallbacks: UseQueryCallbacks<RowType> | undefined;
+  
+  // Handle different parameter combinations
+  if (whereClauseOrCallbacks) {
+    if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
+      // First param is where clause
+      whereClause = whereClauseOrCallbacks as Expr<ColumnsFromRow<RowType>>;
+      actualCallbacks = callbacks;
+    } else {
+      // First param is callbacks
+      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<RowType>;
+    }
+  }
+
+  return new STQuery<DbConnection, RowType>(tableName as any, whereClause as any, actualCallbacks);
+}
+
+/**
+ * Compatibility function for the original getReactiveTable API.
+ * This maintains backward compatibility while providing the same functionality.
+ * For new code, consider using createReactiveTable which returns a ReactiveTable instance.
+ */
 
 function classifyMembership<
   Col extends string,

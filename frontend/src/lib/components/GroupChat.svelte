@@ -25,14 +25,8 @@
         }
     })
 
-    let clientMemberships: STQuery<DbConnection, GroupChatMembership> | null = $state(null);
-    $effect(() => {
-        if (spacetimeContext.connected && spacetimeContext.connection?.identity) {
-            clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchat_membership',
-                where(eq('identity', spacetimeContext.connection.identity))
-            );
-        }
-    })
+    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchat_membership', where(eq('identity', spacetimeContext.identity))));
+    
 
     let createGroupChatModalOpen = $state(false);
     let createGroupChatName = $state("");
@@ -87,10 +81,7 @@
                     </Modal>
                     {#each groupChats.rows as chat}
                         <Row class="my-2">
-                            <Button outline={selectedGroupChat !== chat} onclick={() => {
-                                console.log('GroupChat: Button clicked to select groupchat:', chat.id);
-                                selectedGroupChat = chat;
-                            }}>
+                            <Button outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
                                 {chat.id}
                             </Button>
                         </Row>
@@ -115,7 +106,7 @@
                             {#if messages.rows !== undefined}
                                 {#each messages.rows as message}
                                     <Card class="mb-2">
-                                        <CardHeader>{message.sender}:</CardHeader>
+                                        <CardHeader>{message.sender.toHexString().slice(-6)} <span>at {new Date(message.sent.toDate()).toLocaleTimeString()}</span></CardHeader>
                                         <CardBody>{message.text}</CardBody>
                                     </Card>
                                 {/each}
@@ -157,7 +148,7 @@
                         <Badge pill={true} color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]} class="me-1" style="padding-left: 0.2em; max-width: 1em;">{user.name ? user.name[0] : user.identity.toHexString().at(-1)}</Badge>
                     {/each}
                 {/if}
-                </Col>
+            </Col>
         </Row>
     </Container>
 
