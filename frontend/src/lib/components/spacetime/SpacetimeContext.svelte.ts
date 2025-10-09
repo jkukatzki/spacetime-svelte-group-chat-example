@@ -5,9 +5,9 @@ export const SPACETIMEDB_CONTEXT_KEY = Symbol('spacetimedb');
 
 export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnectionImpl> {
   connection: DbConnection;
-  error: Error | undefined = $state(undefined);
+  error: Error | undefined = $state();
   connected: boolean = $state(false);
-  identity: Identity | null = $state(null);
+  identity: Identity | undefined = $state();
 
   constructor(connection: DbConnection) {
     this.connection = $state<DbConnection>(connection);

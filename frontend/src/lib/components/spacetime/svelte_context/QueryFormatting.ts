@@ -1,6 +1,6 @@
 import { Identity } from 'spacetimedb';
 
-export type Value = string | number | boolean | Identity | null;
+export type Value = string | number | boolean | Identity | undefined;
 
 export type Expr<Column extends string> =
   | { type: 'eq'; key: Column; value: Value }
@@ -9,16 +9,8 @@ export type Expr<Column extends string> =
   | { type: 'or'; children: Expr<Column>[] };
 
 // Helper function to convert Identity to hex string with 0x prefix
-function identityToHexString(identity: Identity): string {
+function identityToQueryCompliantHexString(identity: Identity): string {
   return '0x' + identity.toHexString();
-}
-
-// Helper function to normalize Identity to hex string
-function normalizeValue(value: Value): Value {
-  if (value instanceof Identity) {
-    return identityToHexString(value);
-  }
-  return value;
 }
 
 export const eq = <Column extends string>(
@@ -76,10 +68,10 @@ export function evaluate<Column extends string, RowType = any>(
         return rowValue.isEqual(exprValue);
       }
       if (rowValue instanceof Identity) {
-        return identityToHexString(rowValue) === exprValue;
+        return identityToQueryCompliantHexString(rowValue) === exprValue;
       }
       if (exprValue instanceof Identity) {
-        return rowValue === identityToHexString(exprValue);
+        return rowValue === identityToQueryCompliantHexString(exprValue);
       }
       
       return rowValue === exprValue;
@@ -93,10 +85,10 @@ export function evaluate<Column extends string, RowType = any>(
         return !rowValue.isEqual(exprValue);
       }
       if (rowValue instanceof Identity) {
-        return identityToHexString(rowValue) !== exprValue;
+        return identityToQueryCompliantHexString(rowValue) !== exprValue;
       }
       if (exprValue instanceof Identity) {
-        return rowValue !== identityToHexString(exprValue);
+        return rowValue !== identityToQueryCompliantHexString(exprValue);
       }
       
       return rowValue !== exprValue;
@@ -110,7 +102,7 @@ export function evaluate<Column extends string, RowType = any>(
 
 function formatValue(v: Value): string {
   if (v instanceof Identity) {
-    const hexString = identityToHexString(v);
+    const hexString = identityToQueryCompliantHexString(v);
     return `'${hexString.replace(/'/g, "''")}'`;
   }
   

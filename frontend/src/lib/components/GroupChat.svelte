@@ -1,37 +1,23 @@
 <script lang="ts">
-	import { Badge, Button, Card, CardBody, CardHeader, Col, colorMode, Container, Input, InputGroup, InputGroupText, Modal, Row } from "@sveltestrap/sveltestrap";
-	import { DbConnectionBuilder, DbConnectionImpl } from "spacetimedb";
+	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row } from "@sveltestrap/sveltestrap";
 	import { STQuery, eq, where } from "./spacetime/svelte_context";
-	import { DbConnection, GroupChat, GroupChatMembership, Message, SendMessage, User } from "./spacetime/module_bindings";
+	import { DbConnection, GroupChat, GroupChatMembership, Message } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
-	import { getContext, onDestroy, untrack } from "svelte";
+	import { getContext } from "svelte";
 	import type { AppContext } from "$lib/AppContext.svelte";
 
-    let spacetimeContext = getSpacetimeContext<DbConnection>();
-    let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
-    let messages: STQuery<DbConnection, Message> | null = $state(null);
-    let groupChatMembers: STQuery<DbConnection, GroupChatMembership> | null = $state(null);
-        
-    let selectedGroupChat: GroupChat | null = $state(null);
-    
     const appContext: AppContext = getContext('AppContext');
+    const spacetimeContext = getSpacetimeContext<DbConnection>();
 
-    $effect(() => {
-        if (selectedGroupChat) {
-            messages = new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)));
-            groupChatMembers = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(
-                eq('groupchatId', selectedGroupChat.id)
-            ));
-        }
-    })
-
-    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchat_membership', where(eq('identity', spacetimeContext.identity))));
+    let selectedGroupChat: GroupChat | undefined = $state();
     
+    let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
+    let messages = $derived(new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat?.id))));
+    let groupChatMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchat_membership', where(eq('groupchatId', selectedGroupChat?.id))));
+    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchat_membership', where(eq('identity', spacetimeContext.identity))));
 
     let createGroupChatModalOpen = $state(false);
     let createGroupChatName = $state("");
-    
-
     let input = $state("");
 
     const sendMessage = () => {
@@ -53,7 +39,7 @@
 </script>
 
 {#if spacetimeContext.connection}
-    <Container>
+    <Container xl>
         <!-- Connection Status Bar -->
         <div class="connection-status {spacetimeContext.connected ? 'ready' : 'connecting'}">
             {#if spacetimeContext.connected}
@@ -63,37 +49,49 @@
             {/if}
         </div>
         
-        <Row class="mt-4">
+        <Row class="mt-4 gx-3">
             <Col xs="2">
-                <!-- GROUP CHAT SELECTION -->
-                
-                {#if spacetimeContext.connected && groupChats.rows !== undefined}
-                    <Button onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>New Chat +</Button>
-                    <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
-                        <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
-                        <Button onclick={() => {
-                            if (spacetimeContext.connection && createGroupChatName.trim() !== "" && spacetimeContext.connected) {
-                                spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
-                                createGroupChatName = "";
-                                createGroupChatModalOpen = false;
-                            }
-                        }}>Create</Button>
-                    </Modal>
-                    {#each groupChats.rows as chat}
-                        <Row class="my-2">
-                            <Button outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
-                                {chat.id}
-                            </Button>
-                        </Row>
-                        
-                    {/each}
-                {:else}
-                    <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
-                {/if}
+                <Container fluid class="border rounded p-2">
+                    <!-- GROUP CHAT SELECTION -->
+                    {#if groupChats.rows !== undefined}
+                        <Button class="mb-3" color="primary" onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>
+                            Create group chat +
+                        </Button>
+                        <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
+                            <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
+                            <Button onclick={() => {
+                                if (createGroupChatName.trim() !== "") {
+                                    spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
+                                    createGroupChatName = "";
+                                    createGroupChatModalOpen = false;
+                                }
+                            }}>Create</Button>
+                        </Modal>
+                        <h4>My Groups:</h4>
+                        {#each groupChats.rows.filter(chat => clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
+                            <Row class="my-2">
+                                <Button outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
+                                    {chat.id}
+                                </Button>
+                            </Row>
+                        {:else}
+                            <p class="text-muted ms-1 mb-3">Not a member of any groups.</p>
+                        {/each}
+                        <h4>Available Groups:</h4>
+                        {#each groupChats.rows.filter(chat => !clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
+                            <Row class="my-2">
+                                <Button outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
+                                    {chat.id}
+                                </Button>
+                            </Row>
+                        {/each}
+                    {:else}
+                        <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
+                    {/if}
+                </Container>
             </Col>
-            
             <!-- GROUP CHAT -->
-            <Col xs="7">
+            <Col xs="7" class="border rounded">
                 <!-- HEADER -->
                 {#if selectedGroupChat}
                     <h4>Group Chat {selectedGroupChat.id}</h4>
@@ -106,7 +104,7 @@
                             {#if messages.rows !== undefined}
                                 {#each messages.rows as message}
                                     <Card class="mb-2">
-                                        <CardHeader>{message.sender.toHexString().slice(-6)} <span>at {new Date(message.sent.toDate()).toLocaleTimeString()}</span></CardHeader>
+                                        <CardHeader>{message.sender.toHexString().slice(-6)} <small class="float-left fs-7 text-muted">at {new Date(message.sent.toDate()).toLocaleTimeString()}</small></CardHeader>
                                         <CardBody>{message.text}</CardBody>
                                     </Card>
                                 {/each}
@@ -117,6 +115,7 @@
                             </Card>
                         {/if}
                     {:else}
+                        <h5>You are not a member of this group chat.</h5>
                         <Button color="primary" class="mb-2" onclick={() => {
                             if (spacetimeContext.connection && selectedGroupChat) {
                                 spacetimeContext.connection.reducers.joinGroupchat(selectedGroupChat.id);
