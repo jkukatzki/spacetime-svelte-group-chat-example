@@ -193,7 +193,7 @@
                                     color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]}
                                     class="me-1"
                                 >
-                                    {user.name ? user.name[0] : user.identity.toHexString().slice(-6)}
+                                    {user.name ?? user.identity.toHexString().slice(-6)}
                                 </Badge>
                             {/each}
                         </div>

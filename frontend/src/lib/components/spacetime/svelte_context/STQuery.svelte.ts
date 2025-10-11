@@ -48,7 +48,6 @@ export class STQuery<
   
   private tableName: string;
   private tablePropertyName: string | null = null;
-  private primaryKey: string | null = null;
   private whereClause?: Expr<keyof RowType & string>;
   private callbacks?: UseQueryCallbacks<RowType>;
   private subscription: any = undefined;
@@ -126,35 +125,6 @@ export class STQuery<
     this.tablePropertyName = snakeToCamel(this.tableName);
     
     return this.tablePropertyName;
-  }
-
-  /**
-   * Get the primary key field name for this table from REMOTE_MODULE.
-   * Returns null if the table has no primary key.
-   * This is cached after the first lookup.
-   */
-  private getPrimaryKey(context: SpacetimeDBContext): string | null {
-    if (this.primaryKey !== null) {
-      return this.primaryKey;
-    }
-    
-    if (!context.connection) {
-      return null;
-    }
-    
-    try {
-      // Access the REMOTE_MODULE from the connection
-      const remoteModule = (context.connection as any).__remoteModule;
-      if (remoteModule && remoteModule.tables && remoteModule.tables[this.tableName]) {
-        this.primaryKey = remoteModule.tables[this.tableName].primaryKey || null;
-        return this.primaryKey;
-      }
-    } catch (e) {
-      console.warn('ReactiveTable: Could not access REMOTE_MODULE for table:', this.tableName, e);
-    }
-    
-    this.primaryKey = null;
-    return null;
   }
 
   private setupConnectionWatcher(context: SpacetimeDBContext) {
@@ -244,18 +214,23 @@ export class STQuery<
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
     if (!context.connection || !context.connection.db) {
-      console.log('ReactiveTable: No client or db available for event listeners:', this.tableName);
+      console.log('STQuery: No client or db available for event listeners:', this.tableName);
       return;
     }
 
     const propertyName = this.getTableProperty(context);
     if (!propertyName) {
-      console.error('ReactiveTable: Could not find table property for:', this.tableName);
+      console.error('STQuery: Could not find table property for:', this.tableName);
       return;
     }
 
     const table = context.connection.db[propertyName] as any;
-    const primaryKey = this.getPrimaryKey(context);
+    
+    // Check if table has onUpdate method (tables with primary keys have this)
+    const hasOnUpdate = table && 'onUpdate' in table && typeof table.onUpdate === 'function';
+    const hasOnDelete = table && 'onDelete' in table && typeof table.onDelete === 'function';
+    
+    console.log(`STQuery: Table '${this.tableName}' - hasOnUpdate: ${hasOnUpdate}, hasOnDelete: ${hasOnDelete}`);
     
     if (table && 'onInsert' in table) {
       const onInsert = (ctx: any, row: RowType) => {
@@ -264,63 +239,113 @@ export class STQuery<
           return;
         }
         
+        console.log('STQuery: onInsert for table:', this.tableName, row);
+        
         // Call user callback
         this.callbacks?.onInsert?.(row);
         
-        // Add to array instead of replacing entire array
-        this.#actualRows.push(row);
+        // Add to array and reassign to trigger reactivity
+        this.#actualRows = [...this.#actualRows, row];
       };
 
       const onDelete = (ctx: any, row: RowType) => {
-        // Only handle deletes for tables with primary keys
-        if (!primaryKey) {
-          return;
-        }
-        
         // Filter by where clause if provided
         if (this.whereClause && !evaluate(this.whereClause, row)) {
           return;
         }
         
+        console.log('STQuery: onDelete for table:', this.tableName, row);
+        
         // Call user callback
         this.callbacks?.onDelete?.(row);
         
-        // Remove from array by finding the matching primary key
-        const pkValue = (row as any)[primaryKey];
-        const index = this.#actualRows.findIndex(r => (r as any)[primaryKey] === pkValue);
+        // For tables without primary keys, we can't reliably find and remove rows
+        // Try to find by object equality and create new array to trigger reactivity
+        const index = this.#actualRows.findIndex(r => r === row);
         if (index !== -1) {
-          this.#actualRows.splice(index, 1);
+          this.#actualRows = [
+            ...this.#actualRows.slice(0, index),
+            ...this.#actualRows.slice(index + 1)
+          ];
+        } else {
+          console.warn('STQuery: Could not find row to delete in table:', this.tableName);
         }
       };
 
       const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
-        // Only handle updates for tables with primary keys
-        if (!primaryKey) {
-          return;
-        }
+        console.log('STQuery: onUpdate triggered for table:', this.tableName);
+        console.log('  oldRow:', oldRow);
+        console.log('  newRow:', newRow);
+        console.log('  Same reference?', oldRow === newRow);
+        console.log('  oldRow.name:', (oldRow as any).name);
+        console.log('  newRow.name:', (newRow as any).name);
         
         // Determine membership changes based on where clause
         const change = classifyMembership(this.whereClause, oldRow, newRow);
         
         if (change === 'enter') {
+          console.log('STQuery: Row entering query result set');
           this.callbacks?.onInsert?.(newRow);
           // Add the new row to the array
-          this.#actualRows.push(newRow);
+          this.#actualRows = [...this.#actualRows, newRow];
         } else if (change === 'leave') {
+          console.log('STQuery: Row leaving query result set');
           this.callbacks?.onDelete?.(oldRow);
           // Remove the old row from the array
-          const pkValue = (oldRow as any)[primaryKey];
-          const index = this.#actualRows.findIndex(r => (r as any)[primaryKey] === pkValue);
+          const index = this.#actualRows.findIndex(r => r === oldRow);
           if (index !== -1) {
-            this.#actualRows.splice(index, 1);
+            this.#actualRows = [
+              ...this.#actualRows.slice(0, index),
+              ...this.#actualRows.slice(index + 1)
+            ];
           }
         } else if (change === 'stayIn') {
+          console.log('STQuery: Row staying in query result set, calling onUpdate callback');
           this.callbacks?.onUpdate?.(oldRow, newRow);
-          // Replace the old row with the new row in-place
-          const pkValue = (oldRow as any)[primaryKey];
-          const index = this.#actualRows.findIndex(r => (r as any)[primaryKey] === pkValue);
+          
+          // Find the row in our array by identity (primary key for user table)
+          // We can't use object equality because SpacetimeDB may have given us different references
+          console.log('STQuery: Searching for row to update in array of length:', this.#actualRows.length);
+          
+          // Try to find by identity first (works for User table)
+          let index = -1;
+          if ('identity' in oldRow) {
+            const oldIdentity = (oldRow as any).identity;
+            index = this.#actualRows.findIndex(r => {
+              if ('identity' in r) {
+                const rIdentity = (r as any).identity;
+                // Use isEqual method if available (for Identity objects)
+                if (rIdentity && typeof rIdentity.isEqual === 'function') {
+                  return rIdentity.isEqual(oldIdentity);
+                }
+                // Fallback to reference equality
+                return rIdentity === oldIdentity;
+              }
+              return false;
+            });
+          }
+          
+          // Fallback to object reference equality
+          if (index === -1) {
+            index = this.#actualRows.findIndex(r => r === oldRow);
+          }
+          
+          console.log('STQuery: Found index:', index);
           if (index !== -1) {
-            this.#actualRows[index] = newRow;
+            // Create a shallow clone of newRow to ensure Svelte detects the change
+            // This creates a new object reference while preserving all properties
+            const clonedRow = { ...newRow } as RowType;
+            
+            // Create a new array with the cloned row to trigger Svelte's reactivity
+            this.#actualRows = [
+              ...this.#actualRows.slice(0, index),
+              clonedRow,
+              ...this.#actualRows.slice(index + 1)
+            ];
+            console.log('STQuery: Updated row at index', index, 'with cloned object');
+            console.log('STQuery: Array after update:', this.#actualRows);
+          } else {
+            console.warn('STQuery: Could not find oldRow in rows array for update');
           }
         }
         // 'stayOut' requires no action
@@ -328,23 +353,29 @@ export class STQuery<
 
       table.onInsert(onInsert);
       
-      // Only set up onDelete and onUpdate listeners if table has a primary key
-      if (primaryKey) {
+      // Register onDelete if the table supports it
+      if (hasOnDelete) {
+        console.log(`STQuery: Registering onDelete listener for table '${this.tableName}'`);
         table.onDelete(onDelete);
-        if ('onUpdate' in table) {
-          table.onUpdate(onUpdate);
-        }
+      }
+      
+      // Register onUpdate if the table supports it (only tables with primary keys)
+      if (hasOnUpdate) {
+        console.log(`STQuery: Registering onUpdate listener for table '${this.tableName}'`);
+        table.onUpdate(onUpdate);
+      } else {
+        console.log(`STQuery: Table '${this.tableName}' has no onUpdate method`);
       }
 
       // Store cleanup functions
       this.eventListeners.push(() => {
         if ('removeOnInsert' in table) {
           table.removeOnInsert(onInsert);
-          if (primaryKey) {
+          if (hasOnDelete && 'removeOnDelete' in table) {
             table.removeOnDelete(onDelete);
-            if ('removeOnUpdate' in table) {
-              table.removeOnUpdate(onUpdate);
-            }
+          }
+          if (hasOnUpdate && 'removeOnUpdate' in table) {
+            table.removeOnUpdate(onUpdate);
           }
         }
       });
