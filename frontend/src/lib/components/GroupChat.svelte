@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row } from "@sveltestrap/sveltestrap";
-	import { STQuery, and, eq, neq, where } from "./spacetime/svelte_context";
+	import { STQuery, and, eq, not, where } from "./spacetime/svelte_context";
 	import { DbConnection, GroupChat, GroupChatMembership, Message } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { getContext } from "svelte";
@@ -15,7 +15,7 @@
     let messages = $derived(new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat?.id))));
     
     let groupChatMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
-        where(and(eq('groupchatId', selectedGroupChat?.id), neq('identity', appContext.clientUser?.identity))))
+        where(and(eq('groupchatId', selectedGroupChat?.id), not(eq('identity', appContext.clientUser?.identity)))))
     );
     let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
         where(eq('identity', spacetimeContext.identity))),

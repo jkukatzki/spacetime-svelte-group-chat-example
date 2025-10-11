@@ -4,7 +4,7 @@ export type Value = string | number | boolean | Identity | undefined;
 
 export type Expr<Column extends string> =
   | { type: 'eq'; key: Column; value: Value }
-  | { type: 'neq'; key: Column; value: Value }
+  | { type: 'not'; child: Expr<Column> }
   | { type: 'and'; children: Expr<Column>[] }
   | { type: 'or'; children: Expr<Column>[] };
 
@@ -18,10 +18,9 @@ export const eq = <Column extends string>(
   value: Value
 ): Expr<Column> => ({ type: 'eq', key, value });
 
-export const neq = <Column extends string>(
-  key: Column,
-  value: Value
-): Expr<Column> => ({ type: 'neq', key, value });
+export const not = <Column extends string>(
+  child: Expr<Column>
+): Expr<Column> => ({ type: 'not', child });
 
 export const and = <Column extends string>(
   ...children: Expr<Column>[]
@@ -90,35 +89,36 @@ export function evaluate<Column extends string, RowType = any>(
       const rowValue = getRowValue(expr.key);
       const exprValue = expr.value;
       
+      console.log('[EQ] key:', expr.key, 'rowValue:', rowValue, 'exprValue:', exprValue, 
+        'rowIsIdentity:', rowValue instanceof Identity, 'exprIsIdentity:', exprValue instanceof Identity);
+      
       // Handle Identity comparison
       if (rowValue instanceof Identity && exprValue instanceof Identity) {
-        return rowValue.isEqual(exprValue);
+        const result = rowValue.isEqual(exprValue);
+        console.log('[EQ-BothIdentity] result:', result, 'rowHex:', rowValue.toHexString(), 'exprHex:', exprValue.toHexString());
+        return result;
       }
       if (rowValue instanceof Identity) {
-        return identityToQueryCompliantHexString(rowValue) === exprValue;
+        const result = identityToQueryCompliantHexString(rowValue) === exprValue;
+        console.log('[EQ-RowIdentity] result:', result);
+        return result;
       }
       if (exprValue instanceof Identity) {
-        return rowValue === identityToQueryCompliantHexString(exprValue);
+        const result = rowValue === identityToQueryCompliantHexString(exprValue);
+        console.log('[EQ-ExprIdentity] result:', result, 'rowValue type:', typeof rowValue);
+        return result;
       }
       
-      return rowValue === exprValue;
+      const result = rowValue === exprValue;
+      console.log('[EQ-Standard] result:', result);
+      return result;
     }
-    case 'neq': {
-      const rowValue = getRowValue(expr.key);
-      const exprValue = expr.value;
-      
-      // Handle Identity comparison
-      if (rowValue instanceof Identity && exprValue instanceof Identity) {
-        return !rowValue.isEqual(exprValue);
-      }
-      if (rowValue instanceof Identity) {
-        return identityToQueryCompliantHexString(rowValue) !== exprValue;
-      }
-      if (exprValue instanceof Identity) {
-        return rowValue !== identityToQueryCompliantHexString(exprValue);
-      }
-      
-      return rowValue !== exprValue;
+    case 'not': {
+      console.log('[NOT] evaluating child expression:', expr.child);
+      const childResult = evaluate(expr.child, row);
+      const notResult = !childResult;
+      console.log('[NOT] childResult:', childResult, '=> notResult:', notResult);
+      return notResult;
     }
     case 'and':
       return expr.children.every(child => evaluate(child, row));
@@ -163,8 +163,39 @@ export function toQueryString<Column extends string>(expr: Expr<Column>): string
   switch (expr.type) {
     case 'eq':
       return `${escapeIdent(expr.key)} = ${formatValue(expr.value)}`;
-    case 'neq':
-      return `${escapeIdent(expr.key)} != ${formatValue(expr.value)}`;
+    case 'not': {
+      // Optimize NOT expressions for SpacetimeDB compatibility (no NOT operator)
+      // Apply De Morgan's Laws to push NOT down to the leaf level
+      
+      if (expr.child.type === 'eq') {
+        // NOT (x = y) becomes x != y
+        return `${escapeIdent(expr.child.key)} != ${formatValue(expr.child.value)}`;
+      }
+      
+      if (expr.child.type === 'and') {
+        // De Morgan's Law: NOT (A AND B) = (NOT A) OR (NOT B)
+        const negatedChildren = expr.child.children.map(child => 
+          toQueryString({ type: 'not', child } as Expr<Column>)
+        );
+        return parenthesize(negatedChildren.join(' OR '));
+      }
+      
+      if (expr.child.type === 'or') {
+        // De Morgan's Law: NOT (A OR B) = (NOT A) AND (NOT B)
+        const negatedChildren = expr.child.children.map(child => 
+          toQueryString({ type: 'not', child } as Expr<Column>)
+        );
+        return parenthesize(negatedChildren.join(' AND '));
+      }
+      
+      if (expr.child.type === 'not') {
+        // Double negation: NOT (NOT x) = x
+        return toQueryString(expr.child.child);
+      }
+      
+      // Fallback (shouldn't reach here with proper optimizations)
+      return `NOT (${toQueryString(expr.child)})`;
+    }
     case 'and':
       return parenthesize(expr.children.map(toQueryString).join(' AND '));
     case 'or':

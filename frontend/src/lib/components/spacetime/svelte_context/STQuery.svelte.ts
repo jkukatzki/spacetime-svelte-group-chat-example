@@ -86,6 +86,8 @@ export class STQuery<
     this.whereClause = whereClause;
     this.callbacks = callbacks;
     
+    console.log('[STQuery Constructor]', 'tableName:', tableName, 'whereClause:', whereClause);
+    
     // Set up automatic cleanup using createSubscriber
     this.subscribe = createSubscriber(() => {
       // This function is called when the first effect reads this.rows
@@ -253,6 +255,9 @@ export class STQuery<
     const query = `SELECT * FROM ${sqlTableName}` +
       (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
     
+    console.log('[STQuery setupSubscription] SQL Query:', query);
+    console.log('[STQuery setupSubscription] whereClause:', this.whereClause);
+    
     if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
       this.subscription = context.connection
         .subscriptionBuilder()
@@ -287,10 +292,13 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
+      console.log('[STQuery onInsert]', 'tableName:', this.tableName, 'whereClause:', this.whereClause, 'row:', row);
       if (this.whereClause && !evaluate(this.whereClause, row)) {
+        console.log('[STQuery onInsert] Row filtered out by whereClause');
         return;
       }
       
+      console.log('[STQuery onInsert] Row passed filter, adding to results');
       this.callbacks?.onInsert?.(row);
       this.#actualRows = [...this.#actualRows, row];
     };
