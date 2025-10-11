@@ -23,22 +23,25 @@
 
     let createGroupChatModalOpen = $state(false);
     let createGroupChatName = $state("");
-    let input = $state("");
+    let changeNameModalOpen = $state(false);
+    let newName = $state("");
+
+    let messageInput = $state("");
 
     const sendMessage = () => {
         if (!spacetimeContext.connection) {
             console.error("No connection available");
             return;
         }
-        if (input.trim() === "") {
+        if (messageInput.trim() === "") {
             return;
         }
         if (!selectedGroupChat) {
             console.error("No groupchat selected");
             return;
         }
-        spacetimeContext.connection.reducers.sendMessage(selectedGroupChat.id, input);
-        input = ""; // Clear input after sending
+        spacetimeContext.connection.reducers.sendMessage(selectedGroupChat.id, messageInput);
+        messageInput = ""; // Clear input after sending
     }
 
 </script>
@@ -121,7 +124,7 @@
                                     </div>
                                     <div class="flex-shrink-0">
                                         <InputGroup>
-                                            <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!spacetimeContext.connected} />
+                                            <Input placeholder="Type a message..." bind:value={messageInput} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!spacetimeContext.connected} />
                                             <Button onclick={sendMessage} disabled={!spacetimeContext.connected}>Send</Button>
                                         </InputGroup>
                                     </div>
@@ -152,20 +155,33 @@
                         <CardHeader>
                             <h6>Connected as:</h6>
                             <h6>{appContext.clientUser.name ? appContext.clientUser.name : "..."+appContext.clientUser.identity.toHexString().slice(-10)}</h6>
+                            <Button onclick={() => changeNameModalOpen = true} size="sm" color="secondary">Change Name</Button>
+                            <Modal body header="Change Display Name" isOpen={changeNameModalOpen} toggle={() => changeNameModalOpen = !changeNameModalOpen}>
+                                <Input placeholder="New Display Name" bind:value={newName} />
+                                <Button class="mt-3" onclick={() => {
+                                    if (newName.trim() !== "") {
+                                        spacetimeContext.connection.reducers.setName(newName);
+                                        newName = "";
+                                        changeNameModalOpen = false;
+                                    }
+                                }}>Save</Button>
+                            </Modal>
                         </CardHeader>
                     </Card>
                     {/if}
                     {#if groupChatMemberships.rows.length > 0}
                         <h6 class="mt-3">Users in this group chat:</h6>
                         {#each groupChatMemberships.rows as membership}
-                            {#if appContext.users}
-                                <Badge 
-                                    pill={true}
-                                    color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]}
-                                    class="me-1">
-                                    {appContext.users.rows.find(u => u.identity.toHexString() === membership.identity.toHexString())?.name ?? ("..."+membership.identity.toHexString().slice(-6))}
-                                </Badge>
-                            {/if}
+                            <div class="ms-2">
+                                {#if appContext.users}
+                                    <Badge 
+                                        pill={true}
+                                        color={['primary', 'danger', 'success', 'warning'][Math.floor(Math.random() * 4)]}
+                                        class="me-1">
+                                        {appContext.users.rows.find(u => u.identity.toHexString() === membership.identity.toHexString())?.name ?? (membership.identity.toHexString().slice(-6))}
+                                    </Badge>
+                                {/if}
+                            </div>
                         {/each}
                     {/if}
                     <h6 class="mt-3">All Users:</h6>

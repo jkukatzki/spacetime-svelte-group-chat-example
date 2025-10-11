@@ -20,7 +20,8 @@
                 appContext.clientUser = user;
             }
         },
-        onUpdate: (oldUser, newUser) => { 
+        onUpdate: (oldUser, newUser) => {
+            console.log("User updated:", oldUser, newUser);
             if (spacetimeContext.connection?.identity && newUser.identity.isEqual(spacetimeContext.connection.identity)) {
                 appContext.clientUser = newUser;
             }
