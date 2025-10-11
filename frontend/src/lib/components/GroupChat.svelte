@@ -39,59 +39,49 @@
 </script>
 
 {#if spacetimeContext.connection}
-    <Container xl class="vh-100 d-flex flex-column" style="overflow: hidden;">
-        <!-- Connection Status Bar -->
-        <div class="connection-status {spacetimeContext.connected ? 'ready' : 'connecting'}">
-            {#if spacetimeContext.connected}
-                🟢 Connected to SpacetimeDB
-            {:else}
-                🟡 Connecting to SpacetimeDB...
-            {/if}
-        </div>
-        
-        <Row class="mt-4 gx-3" style="height: calc(100vh - 120px); overflow: hidden;">
-            <Col xs="2">
-                <Container fluid class="border rounded p-2">
-                    <!-- GROUP CHAT SELECTION -->
-                    {#if groupChats.rows !== undefined}
-                        <Button class="mb-3" color="primary" onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>
-                            Create group chat +
-                        </Button>
-                        <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
-                            <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
-                            <Button onclick={() => {
-                                if (createGroupChatName.trim() !== "") {
-                                    spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
-                                    createGroupChatName = "";
-                                    createGroupChatModalOpen = false;
-                                }
-                            }}>Create</Button>
-                        </Modal>
-                        <h4>My Groups:</h4>
-                        {#each groupChats.rows.filter(chat => clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
-                            <div class="my-2">
-                                <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
-                                    {chat.id}
-                                </Button>
-                            </div>
-                        {:else}
-                            <p class="text-muted ms-1 mb-3">Not a member of any groups.</p>
-                        {/each}
-                        <h4>Available Groups:</h4>
-                        {#each groupChats.rows.filter(chat => !clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
-                            <div class="my-2">
-                                <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
-                                    {chat.id}
-                                </Button>
-                            </div>
-                        {/each}
+    <Container xl>
+        <Row class="gx-3 p-3 vh-100">
+            <Col xs="2" class="border rounded mx-1 p-2 h-100">
+                <div class="mb-1">{spacetimeContext.connected ? "🟢 Connected" : "🟡 Connecting"}</div>
+                <!-- GROUP CHAT SELECTION -->
+                {#if groupChats.rows !== undefined}
+                    <Button class="mb-3" color="primary" onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>
+                        Create group chat +
+                    </Button>
+                    <Modal body header="Create Group Chat" isOpen={createGroupChatModalOpen} toggle={() => createGroupChatModalOpen = !createGroupChatModalOpen}>
+                        <Input placeholder="Group Chat Name" bind:value={createGroupChatName} />
+                        <Button onclick={() => {
+                            if (createGroupChatName.trim() !== "") {
+                                spacetimeContext.connection.reducers.createGroupchat(createGroupChatName);
+                                createGroupChatName = "";
+                                createGroupChatModalOpen = false;
+                            }
+                        }}>Create</Button>
+                    </Modal>
+                    <h4>My Groups:</h4>
+                    {#each groupChats.rows.filter(chat => clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
+                        <div class="my-2">
+                            <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
+                                {chat.id}
+                            </Button>
+                        </div>
                     {:else}
-                        <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
-                    {/if}
-                </Container>
+                        <p class="text-muted ms-1 mb-3">Not a member of any groups.</p>
+                    {/each}
+                    <h4>Available Groups:</h4>
+                    {#each groupChats.rows.filter(chat => !clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
+                        <div class="my-2">
+                            <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
+                                {chat.id}
+                            </Button>
+                        </div>
+                    {/each}
+                {:else}
+                    <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
+                {/if}
             </Col>
             <!-- GROUP CHAT -->
-            <Col xs="7" class="border rounded p-3 d-flex flex-column h-100">
+            <Col xs="7" class="border rounded mx-1 p-3 d-flex flex-column h-100">
                 <!-- HEADER -->
                 {#if selectedGroupChat}
                     <div class="flex-shrink-0">
@@ -141,10 +131,13 @@
                 {/if}
             </Col>
             <!-- USERS -->
-            <Col xs="3">
+            <Col xs="auto" class="mx-1 p-1 border rounded">
                 {#if appContext.clientUser}
                     <Card class="border-primary">
-                        <CardHeader><h6>{appContext.clientUser.name ? appContext.clientUser.name : appContext.clientUser.identity.toHexString()}</h6></CardHeader>
+                        <CardHeader>
+                            <h6>Connected as:</h6>
+                            <h6>{appContext.clientUser.name ? appContext.clientUser.name : "..."+appContext.clientUser.identity.toHexString().slice(-10)}</h6>
+                        </CardHeader>
                     </Card>
                 {/if}
                 <h6 class="mt-3">All Users:</h6>
