@@ -1,8 +1,8 @@
 import { untrack } from 'svelte';
 import { createSubscriber } from 'svelte/reactivity';
 import { getSpacetimeContext, SpacetimeDBContext } from '../SpacetimeContext.svelte';
-import type { DbConnectionImpl } from 'spacetimedb';
-import { evaluate, toQueryString, type Expr, type Value } from './QueryFormatting';
+import type { DbConnectionImpl, Identity } from 'spacetimedb';
+import { evaluate, toQueryString, containsIsClient, type Expr, type Value } from './QueryFormatting';
 
 // Re-export query building utilities from React implementation
 export interface UseQueryCallbacks<RowType> {
@@ -86,8 +86,6 @@ export class STQuery<
     this.whereClause = whereClause;
     this.callbacks = callbacks;
     
-    console.log('[STQuery Constructor]', 'tableName:', tableName, 'whereClause:', whereClause);
-    
     // Set up automatic cleanup using createSubscriber
     this.subscribe = createSubscriber(() => {
       // This function is called when the first effect reads this.rows
@@ -114,6 +112,21 @@ export class STQuery<
     }
 
     this.initialize(context);
+    
+    // If whereClause contains isClient, watch for identity changes
+    if (this.whereClause && containsIsClient(this.whereClause)) {
+      $effect(() => {
+        // Access identity to trigger effect when it changes
+        const identity = context.identity;
+        
+        // Re-setup subscription with new identity
+        untrack(() => {
+          if (context.connection && context.connected) {
+            this.setupSubscription(context);
+          }
+        });
+      });
+    }
   }
 
   /**
@@ -253,10 +266,7 @@ export class STQuery<
     // Build SQL query - convert camelCase table name to snake_case for SQL
     const sqlTableName = camelToSnake(this.tableName);
     const query = `SELECT * FROM ${sqlTableName}` +
-      (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
-    
-    console.log('[STQuery setupSubscription] SQL Query:', query);
-    console.log('[STQuery setupSubscription] whereClause:', this.whereClause);
+      (this.whereClause ? ` WHERE ${toQueryString(this.whereClause, context.identity)}` : '');
     
     if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
       this.subscription = context.connection
@@ -292,19 +302,16 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
-      console.log('[STQuery onInsert]', 'tableName:', this.tableName, 'whereClause:', this.whereClause, 'row:', row);
-      if (this.whereClause && !evaluate(this.whereClause, row)) {
-        console.log('[STQuery onInsert] Row filtered out by whereClause');
+      if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
         return;
       }
       
-      console.log('[STQuery onInsert] Row passed filter, adding to results');
       this.callbacks?.onInsert?.(row);
       this.#actualRows = [...this.#actualRows, row];
     };
 
     const onDelete = (ctx: any, row: RowType) => {
-      if (this.whereClause && !evaluate(this.whereClause, row)) {
+      if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
         return;
       }
       
@@ -317,7 +324,7 @@ export class STQuery<
     };
 
     const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
-      const change = classifyMembership(this.whereClause, oldRow, newRow);
+      const change = classifyMembership(this.whereClause, oldRow, newRow, context.identity);
       
       if (change === 'enter') {
         this.callbacks?.onInsert?.(newRow);
@@ -519,13 +526,13 @@ export function createReactiveTable<
 function classifyMembership<
   Col extends string,
   RowType = any,
->(where: Expr<Col> | undefined, oldRow: RowType, newRow: RowType): MembershipChange {
+>(where: Expr<Col> | undefined, oldRow: RowType, newRow: RowType, clientIdentity?: Identity): MembershipChange {
   if (!where) {
     return 'stayIn';
   }
 
-  const oldIn = evaluate(where, oldRow);
-  const newIn = evaluate(where, newRow);
+  const oldIn = evaluate(where, oldRow, clientIdentity);
+  const newIn = evaluate(where, newRow, clientIdentity);
 
   if (oldIn && !newIn) {
     return 'leave';

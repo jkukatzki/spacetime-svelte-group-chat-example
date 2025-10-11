@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row } from "@sveltestrap/sveltestrap";
-	import { STQuery, and, eq, not, where } from "./spacetime/svelte_context";
+	import { STQuery, and, eq, isClient, not, where } from "./spacetime/svelte_context";
 	import { DbConnection, GroupChat, GroupChatMembership, Message } from "./spacetime/module_bindings";
 	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
 	import { getContext } from "svelte";
@@ -12,14 +12,14 @@
     let selectedGroupChat: GroupChat | undefined = $state();
     
     let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
-    let messages = $derived(new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat?.id))));
+    let messages = $derived(selectedGroupChat ? new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id))) : null);
     
-    let groupChatMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
-        where(and(eq('groupchatId', selectedGroupChat?.id), not(eq('identity', appContext.clientUser?.identity)))))
+    let groupChatMemberships = $derived(selectedGroupChat ? 
+        new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
+            where(and(eq('groupchatId', selectedGroupChat.id), not(isClient('identity')))))
+        : null
     );
-    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
-        where(eq('identity', spacetimeContext.identity))),
-    );
+    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(isClient('identity')));
 
     $effect(() => {
         if (clientMemberships.rows.length > 0) {
@@ -160,21 +160,21 @@
                                 {/if}
                             </div>
                             {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
-                                {#if messages.rows !== undefined}
+                                {#if messages?.rows !== undefined}
                                     <div class="chat-header mb-3">
-                                        <small>Total: {messages.rows.length ?? '/'} messages</small>
+                                        <small>Total: {messages?.rows.length ?? '/'} messages</small>
                                     </div>
                                 {/if}
                             {/if}
                         </div>
                         {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
-                            {#if messages.rows !== undefined}
+                            {#if messages?.rows !== undefined}
                                 <!-- MESSAGES AND MESSAGE INPUT -->
                                 <div class="d-flex flex-column flex-grow-1" style="min-height: 0;">
                                     <div class="flex-grow-1 overflow-auto mb-3">
-                                        {#each messages.rows as message}
+                                        {#each messages?.rows as message}
                                             <Card class="mb-2">
-                                                <CardHeader>{message.sender.toHexString().slice(-6)} <small class="float-left fs-7 text-muted">at {new Date(message.sent.toDate()).toLocaleTimeString()}</small></CardHeader>
+                                                <CardHeader>{appContext.users.rows.find(u => u.identity.toHexString() === message.sender.toHexString())?.name ?? message.sender.toHexString().slice(-6)} <small class="float-left fs-7 text-muted">at {new Date(message.sent.toDate()).toLocaleTimeString()}</small></CardHeader>
                                                 <CardBody>{message.text}</CardBody>
                                             </Card>
                                         {/each}
@@ -226,8 +226,8 @@
                         </CardHeader>
                     </Card>
                     {/if}
-                    {#if groupChatMemberships.rows.length > 0}
-                        <h6 class="mt-3">Users in this group chat:</h6>
+                    {#if groupChatMemberships?.rows && groupChatMemberships.rows.length > 0}
+                        <h6 class="mt-3">Users in this group chat (excluding yourself):</h6>
                         {#each groupChatMemberships.rows as membership}
                             <div class="ms-2">
                                 {#if appContext.users}
