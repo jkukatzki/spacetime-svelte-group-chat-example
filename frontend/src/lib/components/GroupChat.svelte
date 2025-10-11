@@ -39,7 +39,7 @@
 </script>
 
 {#if spacetimeContext.connection}
-    <Container xl>
+    <Container xl class="vh-100 d-flex flex-column" style="overflow: hidden;">
         <!-- Connection Status Bar -->
         <div class="connection-status {spacetimeContext.connected ? 'ready' : 'connecting'}">
             {#if spacetimeContext.connected}
@@ -49,7 +49,7 @@
             {/if}
         </div>
         
-        <Row class="mt-4 gx-3">
+        <Row class="mt-4 gx-3" style="height: calc(100vh - 120px); overflow: hidden;">
             <Col xs="2">
                 <Container fluid class="border rounded p-2">
                     <!-- GROUP CHAT SELECTION -->
@@ -69,21 +69,21 @@
                         </Modal>
                         <h4>My Groups:</h4>
                         {#each groupChats.rows.filter(chat => clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
-                            <Row class="my-2">
-                                <Button outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
+                            <div class="my-2">
+                                <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
                                     {chat.id}
                                 </Button>
-                            </Row>
+                            </div>
                         {:else}
                             <p class="text-muted ms-1 mb-3">Not a member of any groups.</p>
                         {/each}
                         <h4>Available Groups:</h4>
                         {#each groupChats.rows.filter(chat => !clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
-                            <Row class="my-2">
-                                <Button outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
+                            <div class="my-2">
+                                <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
                                     {chat.id}
                                 </Button>
-                            </Row>
+                            </div>
                         {/each}
                     {:else}
                         <h3>{spacetimeContext.connected ? 'Loading group chats...' : 'Waiting for connection...'}</h3>
@@ -91,24 +91,38 @@
                 </Container>
             </Col>
             <!-- GROUP CHAT -->
-            <Col xs="7" class="border rounded p-3">
+            <Col xs="7" class="border rounded p-3 d-flex flex-column h-100">
                 <!-- HEADER -->
                 {#if selectedGroupChat}
-                    <h4>Group Chat {selectedGroupChat.id}</h4>
-                    {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
-                        {#if messages}
-                            <div class="chat-header">
-                                <h5>{messages.state === 'ready' ? '' : 'Loading...'}</h5>
-                                <small>Total: {messages.rows?.length ?? '/'} messages</small>
-                            </div>
+                    <div class="flex-shrink-0">
+                        <h4>Group Chat {selectedGroupChat.id}</h4>
+                        {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
                             {#if messages.rows !== undefined}
-                                {#each messages.rows as message}
-                                    <Card class="mb-2">
-                                        <CardHeader>{message.sender.toHexString().slice(-6)} <small class="float-left fs-7 text-muted">at {new Date(message.sent.toDate()).toLocaleTimeString()}</small></CardHeader>
-                                        <CardBody>{message.text}</CardBody>
-                                    </Card>
-                                {/each}
+                                <div class="chat-header mb-3">
+                                    <small>Total: {messages.rows.length ?? '/'} messages</small>
+                                </div>
                             {/if}
+                        {/if}
+                    </div>
+                    {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
+                        {#if messages.rows !== undefined}
+                            <!-- MESSAGES AND MESSAGE INPUT -->
+                            <div class="d-flex flex-column flex-grow-1" style="min-height: 0;">
+                                <div class="flex-grow-1 overflow-auto mb-3">
+                                    {#each messages.rows as message}
+                                        <Card class="mb-2">
+                                            <CardHeader>{message.sender.toHexString().slice(-6)} <small class="float-left fs-7 text-muted">at {new Date(message.sent.toDate()).toLocaleTimeString()}</small></CardHeader>
+                                            <CardBody>{message.text}</CardBody>
+                                        </Card>
+                                    {/each}
+                                </div>
+                                <div class="flex-shrink-0">
+                                    <InputGroup>
+                                        <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!spacetimeContext.connected} />
+                                        <Button onclick={sendMessage} disabled={!spacetimeContext.connected}>Send</Button>
+                                    </InputGroup>
+                                </div>
+                            </div>
                         {:else}
                             <Card>
                                 <CardBody>Loading messages...</CardBody>
@@ -150,11 +164,6 @@
             </Col>
         </Row>
     </Container>
-
-    <InputGroup class="fixed-bottom mb-3 w-50 mx-auto">
-        <Input placeholder="Type a message..." bind:value={input} onkeydown={(e) => e.key === 'Enter' && sendMessage()} disabled={!spacetimeContext.connected} />
-        <Button onclick={sendMessage} disabled={!spacetimeContext.connected}>Send</Button>
-    </InputGroup>
 {:else}
     <p>Connecting to SpacetimeDB...</p>
 {/if}
