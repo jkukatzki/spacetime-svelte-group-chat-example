@@ -28,7 +28,7 @@ import {
 } from "spacetimedb";
 
 export type SendMessage = {
-  groupchatId: number,
+  groupchat: string,
   text: string,
 };
 /**
@@ -42,7 +42,7 @@ export const SendMessage = {
   getTypeScriptAlgebraicType(): __AlgebraicTypeType {
     return __AlgebraicTypeValue.Product({
       elements: [
-        { name: "groupchatId", algebraicType: __AlgebraicTypeValue.U32},
+        { name: "groupchat", algebraicType: __AlgebraicTypeValue.String},
         { name: "text", algebraicType: __AlgebraicTypeValue.String},
       ]
     });

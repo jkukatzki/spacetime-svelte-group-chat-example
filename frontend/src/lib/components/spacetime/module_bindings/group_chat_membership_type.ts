@@ -30,7 +30,7 @@ import {
 export type GroupChatMembership = {
   id: number,
   identity: __Identity,
-  groupchatId: number,
+  groupchatId: string,
 };
 /**
  * An object for generated helper functions.
@@ -45,7 +45,7 @@ export const GroupChatMembership = {
       elements: [
         { name: "id", algebraicType: __AlgebraicTypeValue.U32},
         { name: "identity", algebraicType: __AlgebraicTypeValue.createIdentityType()},
-        { name: "groupchatId", algebraicType: __AlgebraicTypeValue.U32},
+        { name: "groupchatId", algebraicType: __AlgebraicTypeValue.String},
       ]
     });
   },

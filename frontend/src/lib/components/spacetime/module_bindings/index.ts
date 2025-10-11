@@ -40,8 +40,6 @@ import { JoinGroupchat } from "./join_groupchat_reducer.ts";
 export { JoinGroupchat };
 import { SendMessage } from "./send_message_reducer.ts";
 export { SendMessage };
-import { SetGroupChatName } from "./set_group_chat_name_reducer.ts";
-export { SetGroupChatName };
 import { SetName } from "./set_name_reducer.ts";
 export { SetName };
 
@@ -120,10 +118,6 @@ const REMOTE_MODULE = {
       reducerName: "send_message",
       argsType: SendMessage.getTypeScriptAlgebraicType(),
     },
-    set_group_chat_name: {
-      reducerName: "set_group_chat_name",
-      argsType: SetGroupChatName.getTypeScriptAlgebraicType(),
-    },
     set_name: {
       reducerName: "set_name",
       argsType: SetName.getTypeScriptAlgebraicType(),
@@ -163,7 +157,6 @@ export type Reducer = never
 | { name: "IdentityDisconnected", args: IdentityDisconnected }
 | { name: "JoinGroupchat", args: JoinGroupchat }
 | { name: "SendMessage", args: SendMessage }
-| { name: "SetGroupChatName", args: SetGroupChatName }
 | { name: "SetName", args: SetName }
 ;
 
@@ -202,52 +195,36 @@ export class RemoteReducers {
     this.connection.offReducer("identity_disconnected", callback);
   }
 
-  joinGroupchat(groupchatId: number) {
-    const __args = { groupchatId };
+  joinGroupchat(groupchat: string) {
+    const __args = { groupchat };
     let __writer = new __BinaryWriter(1024);
     JoinGroupchat.serialize(__writer, __args);
     let __argsBuffer = __writer.getBuffer();
     this.connection.callReducer("join_groupchat", __argsBuffer, this.setCallReducerFlags.joinGroupchatFlags);
   }
 
-  onJoinGroupchat(callback: (ctx: ReducerEventContext, groupchatId: number) => void) {
+  onJoinGroupchat(callback: (ctx: ReducerEventContext, groupchat: string) => void) {
     this.connection.onReducer("join_groupchat", callback);
   }
 
-  removeOnJoinGroupchat(callback: (ctx: ReducerEventContext, groupchatId: number) => void) {
+  removeOnJoinGroupchat(callback: (ctx: ReducerEventContext, groupchat: string) => void) {
     this.connection.offReducer("join_groupchat", callback);
   }
 
-  sendMessage(groupchatId: number, text: string) {
-    const __args = { groupchatId, text };
+  sendMessage(groupchat: string, text: string) {
+    const __args = { groupchat, text };
     let __writer = new __BinaryWriter(1024);
     SendMessage.serialize(__writer, __args);
     let __argsBuffer = __writer.getBuffer();
     this.connection.callReducer("send_message", __argsBuffer, this.setCallReducerFlags.sendMessageFlags);
   }
 
-  onSendMessage(callback: (ctx: ReducerEventContext, groupchatId: number, text: string) => void) {
+  onSendMessage(callback: (ctx: ReducerEventContext, groupchat: string, text: string) => void) {
     this.connection.onReducer("send_message", callback);
   }
 
-  removeOnSendMessage(callback: (ctx: ReducerEventContext, groupchatId: number, text: string) => void) {
+  removeOnSendMessage(callback: (ctx: ReducerEventContext, groupchat: string, text: string) => void) {
     this.connection.offReducer("send_message", callback);
-  }
-
-  setGroupChatName(groupchatId: number, newName: string) {
-    const __args = { groupchatId, newName };
-    let __writer = new __BinaryWriter(1024);
-    SetGroupChatName.serialize(__writer, __args);
-    let __argsBuffer = __writer.getBuffer();
-    this.connection.callReducer("set_group_chat_name", __argsBuffer, this.setCallReducerFlags.setGroupChatNameFlags);
-  }
-
-  onSetGroupChatName(callback: (ctx: ReducerEventContext, groupchatId: number, newName: string) => void) {
-    this.connection.onReducer("set_group_chat_name", callback);
-  }
-
-  removeOnSetGroupChatName(callback: (ctx: ReducerEventContext, groupchatId: number, newName: string) => void) {
-    this.connection.offReducer("set_group_chat_name", callback);
   }
 
   setName(name: string) {
@@ -282,11 +259,6 @@ export class SetReducerFlags {
   sendMessageFlags: __CallReducerFlags = 'FullUpdate';
   sendMessage(flags: __CallReducerFlags) {
     this.sendMessageFlags = flags;
-  }
-
-  setGroupChatNameFlags: __CallReducerFlags = 'FullUpdate';
-  setGroupChatName(flags: __CallReducerFlags) {
-    this.setGroupChatNameFlags = flags;
   }
 
   setNameFlags: __CallReducerFlags = 'FullUpdate';

@@ -31,7 +31,7 @@ export type Message = {
   sender: __Identity,
   sent: __Timestamp,
   text: string,
-  groupchatId: number,
+  groupchatId: string,
 };
 /**
  * An object for generated helper functions.
@@ -47,7 +47,7 @@ export const Message = {
         { name: "sender", algebraicType: __AlgebraicTypeValue.createIdentityType()},
         { name: "sent", algebraicType: __AlgebraicTypeValue.createTimestampType()},
         { name: "text", algebraicType: __AlgebraicTypeValue.String},
-        { name: "groupchatId", algebraicType: __AlgebraicTypeValue.U32},
+        { name: "groupchatId", algebraicType: __AlgebraicTypeValue.String},
       ]
     });
   },
