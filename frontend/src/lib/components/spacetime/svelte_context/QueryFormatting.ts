@@ -53,14 +53,41 @@ export const or = <Column extends string>(
   return { type: 'or', children: pruned };
 };
 
+// Convert camelCase to snake_case for database field names
+function camelToSnakeCase(str: string): string {
+  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+// Convert snake_case to camelCase for TypeScript field names
+function snakeToCamelCase(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
 export function evaluate<Column extends string, RowType = any>(
   expr: Expr<Column>,
   row: RowType
 ): boolean {
-  const rowRecord = row as Record<Column, unknown>;
+  const rowRecord = row as Record<string, unknown>;
+  
+  // Helper to get value from row, trying both the key as-is and converted to camelCase
+  const getRowValue = (key: string) => {
+    // Try the key as provided first
+    if (key in rowRecord) {
+      return rowRecord[key];
+    }
+    // If not found and key contains underscore, try camelCase version
+    if (key.includes('_')) {
+      const camelKey = snakeToCamelCase(key);
+      if (camelKey in rowRecord) {
+        return rowRecord[camelKey];
+      }
+    }
+    return undefined;
+  };
+  
   switch (expr.type) {
     case 'eq': {
-      const rowValue = rowRecord[expr.key];
+      const rowValue = getRowValue(expr.key);
       const exprValue = expr.value;
       
       // Handle Identity comparison
@@ -77,7 +104,7 @@ export function evaluate<Column extends string, RowType = any>(
       return rowValue === exprValue;
     }
     case 'neq': {
-      const rowValue = rowRecord[expr.key];
+      const rowValue = getRowValue(expr.key);
       const exprValue = expr.value;
       
       // Handle Identity comparison
@@ -101,6 +128,10 @@ export function evaluate<Column extends string, RowType = any>(
 }
 
 function formatValue(v: Value): string {
+  if (v === undefined) {
+    return 'NULL';
+  }
+  
   if (v instanceof Identity) {
     const hexString = identityToQueryCompliantHexString(v);
     return `'${hexString.replace(/'/g, "''")}'`;
@@ -113,14 +144,7 @@ function formatValue(v: Value): string {
       return Number.isFinite(v) ? String(v) : `'${String(v)}'`;
     case 'boolean':
       return v ? 'TRUE' : 'FALSE';
-    default:
-      return "''";
   }
-}
-
-// Convert camelCase to snake_case for database field names
-function camelToSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 }
 
 function escapeIdent(id: string): string {

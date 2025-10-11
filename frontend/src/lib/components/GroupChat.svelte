@@ -17,7 +17,7 @@
     let groupChatMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
         where(and(eq('groupchatId', selectedGroupChat?.id), neq('identity', appContext.clientUser?.identity))))
     );
-    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('message',
+    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
         where(eq('identity', spacetimeContext.identity))),
     );
 

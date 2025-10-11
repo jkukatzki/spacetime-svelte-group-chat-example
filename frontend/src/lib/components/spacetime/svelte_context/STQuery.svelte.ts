@@ -71,7 +71,7 @@ export class STQuery<
   
   private tableName: string;
   private tablePropertyName: string | null = null;
-  private whereClause?: Expr<keyof RowType & string>;
+  private whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>;
   private callbacks?: UseQueryCallbacks<RowType>;
   private subscription: any = undefined;
   private eventListeners: (() => void)[] = [];
@@ -79,7 +79,7 @@ export class STQuery<
 
   constructor(
     tableName: ValidTableNamesForRowType<DbConnection, RowType> & string,
-    whereClause?: Expr<keyof RowType & string>,
+    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>,
     callbacks?: UseQueryCallbacks<RowType>
   ) {
     this.tableName = tableName;
@@ -409,6 +409,11 @@ type CamelToSnake<S extends string> = S extends `${infer First}${infer Rest}`
     ? `_${Lowercase<First>}${CamelToSnake<Rest>}`
     : `${First}${CamelToSnake<Rest>}`
   : S;
+
+/**
+ * Union type that accepts both camelCase and snake_case versions of column names.
+ */
+type ColumnNameVariants<T extends string> = T | CamelToSnake<T>;
 
 /**
  * Union of all valid table names (camelCase from db properties OR snake_case SQL names).
