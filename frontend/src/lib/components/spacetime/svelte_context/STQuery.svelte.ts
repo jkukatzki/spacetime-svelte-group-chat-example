@@ -132,33 +132,21 @@ export class STQuery<
 
   /**
    * Find a row in the array by comparing primary key fields or object reference.
-   * Handles Identity fields, numeric IDs, and string IDs.
+   * Dynamically determines the primary key field from the table.
    */
-  private findRowIndex(targetRow: RowType): number {
-    // Try to find by 'id' field first (numeric or string primary keys)
-    if ('id' in targetRow) {
-      const targetId = (targetRow as any).id;
+  private findRowIndex(targetRow: RowType, pkField?: string): number {
+    // If we have a primary key field name, use it
+    if (pkField && pkField in targetRow) {
+      const targetPkValue = (targetRow as any)[pkField];
       const index = this.#actualRows.findIndex(r => {
-        if ('id' in r) {
-          return (r as any).id === targetId;
-        }
-        return false;
-      });
-      
-      if (index !== -1) return index;
-    }
-    
-    // Try to find by 'identity' field (Identity primary keys)
-    if ('identity' in targetRow) {
-      const targetIdentity = (targetRow as any).identity;
-      const index = this.#actualRows.findIndex(r => {
-        if ('identity' in r) {
-          const rIdentity = (r as any).identity;
+        if (pkField in r) {
+          const rPkValue = (r as any)[pkField];
           // Use isEqual method if available (for Identity objects)
-          if (rIdentity && typeof rIdentity.isEqual === 'function') {
-            return rIdentity.isEqual(targetIdentity);
+          if (rPkValue && typeof rPkValue.isEqual === 'function') {
+            return rPkValue.isEqual(targetPkValue);
           }
-          return rIdentity === targetIdentity;
+          // Standard equality for primitive types
+          return rPkValue === targetPkValue;
         }
         return false;
       });
@@ -274,6 +262,9 @@ export class STQuery<
       return;
     }
     
+    // Extract the primary key field name from the table's metadata
+    const pkField: string | undefined = table.tableCache?.tableTypeInfo?.primaryKey;
+    
     // Check if table supports onUpdate/onDelete (tables with primary keys)
     const hasOnUpdate = 'onUpdate' in table && typeof table.onUpdate === 'function';
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
@@ -294,7 +285,7 @@ export class STQuery<
       
       this.callbacks?.onDelete?.(row);
       
-      const index = this.findRowIndex(row);
+      const index = this.findRowIndex(row, pkField);
       if (index !== -1) {
         this.#actualRows = this.removeAtIndex(index);
       }
@@ -308,14 +299,14 @@ export class STQuery<
         this.#actualRows = [...this.#actualRows, newRow];
       } else if (change === 'leave') {
         this.callbacks?.onDelete?.(oldRow);
-        const index = this.findRowIndex(oldRow);
+        const index = this.findRowIndex(oldRow, pkField);
         if (index !== -1) {
           this.#actualRows = this.removeAtIndex(index);
         }
       } else if (change === 'stayIn') {
         this.callbacks?.onUpdate?.(oldRow, newRow);
         
-        const index = this.findRowIndex(oldRow);
+        const index = this.findRowIndex(oldRow, pkField);
         if (index !== -1) {
           // Mutate the existing object in place to preserve references
           const existingRow = this.#actualRows[index];
