@@ -14,12 +14,19 @@
     let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
     let messages = $derived(new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat?.id))));
     
-    let groupChatMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchat_membership',
+    let groupChatMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
         where(and(eq('groupchatId', selectedGroupChat?.id), neq('identity', appContext.clientUser?.identity))))
     );
-    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('groupchat_membership',
-        where(eq('identity', spacetimeContext.identity)))
+    let clientMemberships = $derived(new STQuery<DbConnection, GroupChatMembership>('message',
+        where(eq('identity', spacetimeContext.identity))),
     );
+
+    $effect(() => {
+        if (clientMemberships.rows.length > 0) {
+            // Auto-selecting group chat based on new membership
+            selectedGroupChat = groupChats.rows?.find(chat => chat.id === clientMemberships.rows[clientMemberships.rows.length - 1].groupchatId);
+        }
+    })
 
     let createGroupChatModalOpen = $state(false);
     let createGroupChatName = $state("");

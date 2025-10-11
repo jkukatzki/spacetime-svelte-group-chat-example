@@ -12,15 +12,44 @@ export interface UseQueryCallbacks<RowType> {
 }
 
 /**
- * Convert snake_case table name to camelCase property name.
+ * Convert camelCase to snake_case.
+ * Examples:
+ *   "user" -> "user"
+ *   "groupchatMembership" -> "groupchat_membership"
+ */
+function camelToSnake(str: string): string {
+  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Convert snake_case to camelCase.
  * Examples:
  *   "user" -> "user"
  *   "groupchat_membership" -> "groupchatMembership"
- *   "group_chat_membership" -> "groupChatMembership"
  */
-function snakeToCamel(tableName: string): string {
-  return tableName.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+function snakeToCamel(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
+
+/**
+ * Map of valid table names to their row types
+ */
+type TableNameToRowType<DbConnection extends DbConnectionImpl> = {
+  [K in keyof DbConnection['db']]: ExtractRowType<DbConnection['db'][K]>
+} & {
+  [K in keyof DbConnection['db'] as CamelToSnake<K & string>]: ExtractRowType<DbConnection['db'][K]>
+};
+
+/**
+ * Get valid table names for a given row type
+ */
+type ValidTableNamesForRowType<
+  DbConnection extends DbConnectionImpl,
+  RowType
+> = {
+  [TableName in keyof TableNameToRowType<DbConnection>]: 
+    RowType extends TableNameToRowType<DbConnection>[TableName] ? TableName : never
+}[keyof TableNameToRowType<DbConnection>];
 
 /**
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
@@ -35,7 +64,7 @@ function snakeToCamel(tableName: string): string {
 export class STQuery<
   DbConnection extends DbConnectionImpl,
   RowType extends Record<string, any>,
-  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>
+  TableName extends ValidTableName<DbConnection> = any
 > {
   #actualRows: RowType[] = $state([]);
   state: 'loading' | 'ready' = $state('loading');
@@ -49,7 +78,7 @@ export class STQuery<
   private subscribe: () => void;
 
   constructor(
-    tableName: TableName & AssertRowTypeMatches<DbConnection, RowType, TableName>,
+    tableName: ValidTableNamesForRowType<DbConnection, RowType> & string,
     whereClause?: Expr<keyof RowType & string>,
     callbacks?: UseQueryCallbacks<RowType>
   ) {
@@ -101,7 +130,7 @@ export class STQuery<
 
   /**
    * Get the property name to access the table on the db object.
-   * This is cached after the first lookup.
+   * Converts snake_case to camelCase if needed, since db properties are camelCase.
    */
   private getTableProperty(context: SpacetimeDBContext): string | null {
     if (this.tablePropertyName) {
@@ -112,7 +141,7 @@ export class STQuery<
       return null;
     }
     
-    // Convert snake_case table name to camelCase property name
+    // Convert snake_case to camelCase for db property access
     this.tablePropertyName = snakeToCamel(this.tableName);
     
     return this.tablePropertyName;
@@ -219,8 +248,9 @@ export class STQuery<
       this.subscription.unsubscribe();
     }
 
-    // Build SQL query
-    const query = `SELECT * FROM ${this.tableName}` +
+    // Build SQL query - convert camelCase table name to snake_case for SQL
+    const sqlTableName = camelToSnake(this.tableName);
+    const query = `SELECT * FROM ${sqlTableName}` +
       (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
     
     if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
@@ -407,9 +437,9 @@ type AssertRowTypeMatches<
   DbConnection extends DbConnectionImpl,
   RowType,
   TableName extends ValidTableName<DbConnection>
-> = [RowType] extends [ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>]
-  ? unknown
-  : { error: 'RowType does not match table row type'; expected: ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>; got: RowType };
+> = RowType extends ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>
+  ? TableName
+  : { ERROR: 'RowType does not match table row type'; expected: ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>; got: RowType };
 
 /**
  * Type alias for backward compatibility.

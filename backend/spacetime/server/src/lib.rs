@@ -78,10 +78,16 @@ pub fn create_groupchat(ctx: &ReducerContext, name: String) -> Result<(), String
     if name.is_empty() {
         return Err("Group chat name must not be empty".to_string());
     }
-    ctx.db.groupchat().insert(GroupChat { 
+    let groupchat = ctx.db.groupchat().insert(GroupChat {
         id: 0, // Auto-incremented
         name,
         created_by: ctx.sender
+    });
+    // add the creator as a member of the group chat
+    ctx.db.groupchat_membership().insert(GroupChatMembership {
+        id: 0,
+        identity: ctx.sender,
+        groupchat_id: groupchat.id
     });
     Ok(())
 }
@@ -91,17 +97,10 @@ pub fn set_group_chat_name(ctx: &ReducerContext, groupchat_id: u32, new_name: St
     if new_name.is_empty() {
         return Err("Group chat name must not be empty".to_string());
     }
-    
-    // Find the existing group chat
     if let Some(groupchat) = ctx.db.groupchat().id().find(&groupchat_id) {
-        // Check if the caller is the creator
         if groupchat.created_by != ctx.sender {
             return Err("Only the creator can rename the group chat".to_string());
         }
-        
-        log::info!("Renaming group chat {} to '{}' by {}", groupchat_id, new_name, ctx.sender);
-        
-        // Update the group chat name (ID stays the same)
         ctx.db.groupchat().id().update(GroupChat {
             id: groupchat_id,
             name: new_name,
