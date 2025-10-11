@@ -1,4 +1,4 @@
-import { onMount, onDestroy, untrack } from 'svelte';
+import { untrack } from 'svelte';
 import { createSubscriber } from 'svelte/reactivity';
 import { getSpacetimeContext, SpacetimeDBContext } from '../SpacetimeContext.svelte';
 import type { DbConnectionImpl } from 'spacetimedb';
@@ -26,17 +26,13 @@ function snakeToCamel(tableName: string): string {
 
 /**
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
- * This class encapsulates table subscription logic and maintains reactive state using $state().
  * 
- * **Automatic Cleanup:**
- * - Uses Svelte's createSubscriber to automatically clean up when effects are destroyed
- * - No need to manually call .destroy() when reassigning or switching between instances
- * - Cleanup happens automatically when the containing effect re-runs or is destroyed
- * 
- * **Object Reference Preservation:**
- * - For tables WITH primary keys: Rows are mutated in-place (push/splice/replace) to preserve object references
- * - For tables WITHOUT primary keys: Rows are append-only (onInsert only), updates/deletes are not supported
- * - This ensures that object references remain stable, allowing for reliable === comparisons in Svelte templates
+ * **Features:**
+ * - Automatic cleanup using Svelte's createSubscriber
+ * - Reactive state with $state() runes
+ * - Supports filtered queries with WHERE clauses
+ * - Handles onInsert, onDelete, and onUpdate callbacks
+ * - Creates new object references to trigger Svelte's fine-grained reactivity
  */
 export class STQuery<
   DbConnection extends DbConnectionImpl,
@@ -73,12 +69,9 @@ export class STQuery<
     });
 
     const context = getSpacetimeContext();
-    // Get SpacetimeDB client from context internally
+    
     try {
-      
-      
       if (!context.connection || !context.connected) {
-        console.log('ReactiveTable: Connection not available yet for table:', this.tableName);
         // Set up a watcher for when connection becomes available
         this.setupConnectionWatcher(context);
         return;
@@ -86,7 +79,7 @@ export class STQuery<
     } catch {
       throw new Error(
         'Could not find SpacetimeDB client! Did you forget to add a ' +
-          'SpacetimeDBProvider? ReactiveTable must be used in the Svelte component tree ' +
+          'SpacetimeDBProvider? STQuery must be used in the Svelte component tree ' +
           'under a SpacetimeDBProvider component.'
       );
     }
@@ -128,10 +121,8 @@ export class STQuery<
   }
 
   private setupConnectionWatcher(context: SpacetimeDBContext) {
-    // Use Svelte's $effect to watch for connection changes
     $effect(() => {
       if (context.connection && context.connected) {
-        // Use untrack to prevent reactive updates in initialize from causing loops
         untrack(() => {
           this.initialize(context);
         });
@@ -139,24 +130,83 @@ export class STQuery<
     });
   }
 
+  /**
+   * Find a row in the array by comparing primary key fields or object reference.
+   * Handles Identity fields, numeric IDs, and string IDs.
+   */
+  private findRowIndex(targetRow: RowType): number {
+    // Try to find by 'id' field first (numeric or string primary keys)
+    if ('id' in targetRow) {
+      const targetId = (targetRow as any).id;
+      const index = this.#actualRows.findIndex(r => {
+        if ('id' in r) {
+          return (r as any).id === targetId;
+        }
+        return false;
+      });
+      
+      if (index !== -1) return index;
+    }
+    
+    // Try to find by 'identity' field (Identity primary keys)
+    if ('identity' in targetRow) {
+      const targetIdentity = (targetRow as any).identity;
+      const index = this.#actualRows.findIndex(r => {
+        if ('identity' in r) {
+          const rIdentity = (r as any).identity;
+          // Use isEqual method if available (for Identity objects)
+          if (rIdentity && typeof rIdentity.isEqual === 'function') {
+            return rIdentity.isEqual(targetIdentity);
+          }
+          return rIdentity === targetIdentity;
+        }
+        return false;
+      });
+      
+      if (index !== -1) return index;
+    }
+    
+    // Fallback to object reference equality
+    return this.#actualRows.findIndex(r => r === targetRow);
+  }
+
+  /**
+   * Create a new array with an item removed at the specified index.
+   */
+  private removeAtIndex(index: number): RowType[] {
+    return [
+      ...this.#actualRows.slice(0, index),
+      ...this.#actualRows.slice(index + 1)
+    ];
+  }
+
+  /**
+   * Create a new array with an item replaced at the specified index.
+   */
+  private replaceAtIndex(index: number, newItem: RowType): RowType[] {
+    return [
+      ...this.#actualRows.slice(0, index),
+      newItem,
+      ...this.#actualRows.slice(index + 1)
+    ];
+  }
+
   private initialize(context: SpacetimeDBContext) {
-    // Don't initialize if client isn't ready yet or not connected
     if (!context.connection || !context.connected) {
-      console.log('ReactiveTable: Client not ready or not connected for table:', this.tableName);
       return;
     }
 
     // Set up connection state listeners
     const onConnect = () => {
       untrack(() => {
-        this.rows = []; // Clear rows on reconnect
+        this.rows = [];
         this.setupSubscription(context);
       });
     };
     const onDisconnect = () => {
       untrack(() => {
         this.state = 'loading';
-        this.rows = []; // Clear rows on disconnect
+        this.rows = [];
       });
     };
     const onConnectError = () => {
@@ -167,7 +217,7 @@ export class STQuery<
 
     // Add event listeners if the client supports them
     const clientWithEvents = context.connection as any;
-    if (clientWithEvents && clientWithEvents.on && typeof clientWithEvents.on === 'function') {
+    if (clientWithEvents?.on && typeof clientWithEvents.on === 'function') {
       clientWithEvents.on('connect', onConnect);
       clientWithEvents.on('disconnect', onDisconnect);
       clientWithEvents.on('connectError', onConnectError);
@@ -182,13 +232,10 @@ export class STQuery<
     // Initial setup
     this.setupSubscription(context);
     this.setupTableEventListeners(context);
-    // Note: updateRows will be called by onApplied callback when subscription is ready
   }
 
   private setupSubscription(context: SpacetimeDBContext) {
-    // Don't set up subscription if client isn't ready or not connected
     if (!context.connection || !context.connected) {
-      console.log('ReactiveTable: No client available or not connected for subscription setup:', this.tableName);
       return;
     }
 
@@ -197,15 +244,14 @@ export class STQuery<
       this.subscription.unsubscribe();
     }
 
-    // Use table name directly in SQL query (snake_case)
+    // Build SQL query
     const query = `SELECT * FROM ${this.tableName}` +
       (this.whereClause ? ` WHERE ${toQueryString(this.whereClause)}` : '');
-    console.log('QUERY', query);
+    
     if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
       this.subscription = context.connection
         .subscriptionBuilder()
         .onApplied(() => {
-          // Subscription is ready - onInsert callbacks have fired for all existing rows
           this.state = 'ready';
         })
         .subscribe(query);
@@ -213,8 +259,7 @@ export class STQuery<
   }
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
-    if (!context.connection || !context.connection.db) {
-      console.log('STQuery: No client or db available for event listeners:', this.tableName);
+    if (!context.connection?.db) {
       return;
     }
 
@@ -225,172 +270,92 @@ export class STQuery<
     }
 
     const table = context.connection.db[propertyName] as any;
-    
-    // Check if table has onUpdate method (tables with primary keys have this)
-    const hasOnUpdate = table && 'onUpdate' in table && typeof table.onUpdate === 'function';
-    const hasOnDelete = table && 'onDelete' in table && typeof table.onDelete === 'function';
-    
-    console.log(`STQuery: Table '${this.tableName}' - hasOnUpdate: ${hasOnUpdate}, hasOnDelete: ${hasOnDelete}`);
-    
-    if (table && 'onInsert' in table) {
-      const onInsert = (ctx: any, row: RowType) => {
-        // Filter by where clause if provided
-        if (this.whereClause && !evaluate(this.whereClause, row)) {
-          return;
-        }
-        
-        console.log('STQuery: onInsert for table:', this.tableName, row);
-        
-        // Call user callback
-        this.callbacks?.onInsert?.(row);
-        
-        // Add to array and reassign to trigger reactivity
-        this.#actualRows = [...this.#actualRows, row];
-      };
-
-      const onDelete = (ctx: any, row: RowType) => {
-        // Filter by where clause if provided
-        if (this.whereClause && !evaluate(this.whereClause, row)) {
-          return;
-        }
-        
-        console.log('STQuery: onDelete for table:', this.tableName, row);
-        
-        // Call user callback
-        this.callbacks?.onDelete?.(row);
-        
-        // For tables without primary keys, we can't reliably find and remove rows
-        // Try to find by object equality and create new array to trigger reactivity
-        const index = this.#actualRows.findIndex(r => r === row);
-        if (index !== -1) {
-          this.#actualRows = [
-            ...this.#actualRows.slice(0, index),
-            ...this.#actualRows.slice(index + 1)
-          ];
-        } else {
-          console.warn('STQuery: Could not find row to delete in table:', this.tableName);
-        }
-      };
-
-      const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
-        console.log('STQuery: onUpdate triggered for table:', this.tableName);
-        console.log('  oldRow:', oldRow);
-        console.log('  newRow:', newRow);
-        console.log('  Same reference?', oldRow === newRow);
-        console.log('  oldRow.name:', (oldRow as any).name);
-        console.log('  newRow.name:', (newRow as any).name);
-        
-        // Determine membership changes based on where clause
-        const change = classifyMembership(this.whereClause, oldRow, newRow);
-        
-        if (change === 'enter') {
-          console.log('STQuery: Row entering query result set');
-          this.callbacks?.onInsert?.(newRow);
-          // Add the new row to the array
-          this.#actualRows = [...this.#actualRows, newRow];
-        } else if (change === 'leave') {
-          console.log('STQuery: Row leaving query result set');
-          this.callbacks?.onDelete?.(oldRow);
-          // Remove the old row from the array
-          const index = this.#actualRows.findIndex(r => r === oldRow);
-          if (index !== -1) {
-            this.#actualRows = [
-              ...this.#actualRows.slice(0, index),
-              ...this.#actualRows.slice(index + 1)
-            ];
-          }
-        } else if (change === 'stayIn') {
-          console.log('STQuery: Row staying in query result set, calling onUpdate callback');
-          this.callbacks?.onUpdate?.(oldRow, newRow);
-          
-          // Find the row in our array by identity (primary key for user table)
-          // We can't use object equality because SpacetimeDB may have given us different references
-          console.log('STQuery: Searching for row to update in array of length:', this.#actualRows.length);
-          
-          // Try to find by identity first (works for User table)
-          let index = -1;
-          if ('identity' in oldRow) {
-            const oldIdentity = (oldRow as any).identity;
-            index = this.#actualRows.findIndex(r => {
-              if ('identity' in r) {
-                const rIdentity = (r as any).identity;
-                // Use isEqual method if available (for Identity objects)
-                if (rIdentity && typeof rIdentity.isEqual === 'function') {
-                  return rIdentity.isEqual(oldIdentity);
-                }
-                // Fallback to reference equality
-                return rIdentity === oldIdentity;
-              }
-              return false;
-            });
-          }
-          
-          // Fallback to object reference equality
-          if (index === -1) {
-            index = this.#actualRows.findIndex(r => r === oldRow);
-          }
-          
-          console.log('STQuery: Found index:', index);
-          if (index !== -1) {
-            // Create a shallow clone of newRow to ensure Svelte detects the change
-            // This creates a new object reference while preserving all properties
-            const clonedRow = { ...newRow } as RowType;
-            
-            // Create a new array with the cloned row to trigger Svelte's reactivity
-            this.#actualRows = [
-              ...this.#actualRows.slice(0, index),
-              clonedRow,
-              ...this.#actualRows.slice(index + 1)
-            ];
-            console.log('STQuery: Updated row at index', index, 'with cloned object');
-            console.log('STQuery: Array after update:', this.#actualRows);
-          } else {
-            console.warn('STQuery: Could not find oldRow in rows array for update');
-          }
-        }
-        // 'stayOut' requires no action
-      };
-
-      table.onInsert(onInsert);
-      
-      // Register onDelete if the table supports it
-      if (hasOnDelete) {
-        console.log(`STQuery: Registering onDelete listener for table '${this.tableName}'`);
-        table.onDelete(onDelete);
-      }
-      
-      // Register onUpdate if the table supports it (only tables with primary keys)
-      if (hasOnUpdate) {
-        console.log(`STQuery: Registering onUpdate listener for table '${this.tableName}'`);
-        table.onUpdate(onUpdate);
-      } else {
-        console.log(`STQuery: Table '${this.tableName}' has no onUpdate method`);
-      }
-
-      // Store cleanup functions
-      this.eventListeners.push(() => {
-        if ('removeOnInsert' in table) {
-          table.removeOnInsert(onInsert);
-          if (hasOnDelete && 'removeOnDelete' in table) {
-            table.removeOnDelete(onDelete);
-          }
-          if (hasOnUpdate && 'removeOnUpdate' in table) {
-            table.removeOnUpdate(onUpdate);
-          }
-        }
-      });
+    if (!table || !('onInsert' in table)) {
+      return;
     }
+    
+    // Check if table supports onUpdate/onDelete (tables with primary keys)
+    const hasOnUpdate = 'onUpdate' in table && typeof table.onUpdate === 'function';
+    const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
+    
+    const onInsert = (ctx: any, row: RowType) => {
+      if (this.whereClause && !evaluate(this.whereClause, row)) {
+        return;
+      }
+      
+      this.callbacks?.onInsert?.(row);
+      this.#actualRows = [...this.#actualRows, row];
+    };
+
+    const onDelete = (ctx: any, row: RowType) => {
+      if (this.whereClause && !evaluate(this.whereClause, row)) {
+        return;
+      }
+      
+      this.callbacks?.onDelete?.(row);
+      
+      const index = this.findRowIndex(row);
+      if (index !== -1) {
+        this.#actualRows = this.removeAtIndex(index);
+      }
+    };
+
+    const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
+      const change = classifyMembership(this.whereClause, oldRow, newRow);
+      
+      if (change === 'enter') {
+        this.callbacks?.onInsert?.(newRow);
+        this.#actualRows = [...this.#actualRows, newRow];
+      } else if (change === 'leave') {
+        this.callbacks?.onDelete?.(oldRow);
+        const index = this.findRowIndex(oldRow);
+        if (index !== -1) {
+          this.#actualRows = this.removeAtIndex(index);
+        }
+      } else if (change === 'stayIn') {
+        this.callbacks?.onUpdate?.(oldRow, newRow);
+        
+        const index = this.findRowIndex(oldRow);
+        if (index !== -1) {
+          // Mutate the existing object in place to preserve references
+          const existingRow = this.#actualRows[index];
+          Object.assign(existingRow, newRow);
+          // Create a new array to trigger Svelte reactivity
+          this.#actualRows = [...this.#actualRows];
+        }
+      }
+    };
+
+    // Register event listeners
+    table.onInsert(onInsert);
+    if (hasOnDelete) {
+      table.onDelete(onDelete);
+    }
+    if (hasOnUpdate) {
+      table.onUpdate(onUpdate);
+    }
+
+    // Store cleanup functions
+    this.eventListeners.push(() => {
+      if ('removeOnInsert' in table) {
+        table.removeOnInsert(onInsert);
+        if (hasOnDelete && 'removeOnDelete' in table) {
+          table.removeOnDelete(onDelete);
+        }
+        if (hasOnUpdate && 'removeOnUpdate' in table) {
+          table.removeOnUpdate(onUpdate);
+        }
+      }
+    });
   }
 
   private updateRows(context: SpacetimeDBContext) {
-    if (!context.connection || !context.connection.db) {
-      console.log('ReactiveTable: No client or db available for updating rows:', this.tableName);
+    if (!context.connection?.db) {
       return;
     }
 
     const propertyName = this.getTableProperty(context);
     if (!propertyName) {
-      console.error('ReactiveTable: Could not find table property for:', this.tableName);
       this.rows = [];
       return;
     }
@@ -402,42 +367,33 @@ export class STQuery<
         ? allRows.filter(row => evaluate(this.whereClause!, row))
         : allRows;
     } else {
-      // Table exists but has no data or iter method - set to empty array
       this.rows = [];
     }
     
-    // Set state to ready after successfully updating rows
     untrack(() => {
       this.state = 'ready';
-      console.log('ReactiveTable: State set to ready for table:', this.tableName);
     });
   }
 
   /**
    * Clean up all subscriptions and event listeners.
-   * This is called automatically when effects are destroyed.
-   * Can also be called manually when you no longer need the reactive table.
+   * Called automatically when effects are destroyed, or manually when needed.
    */
   cleanup() {
-    console.log('ReactiveTable: Cleaning up table:', this.tableName);
-    
     if (this.subscription) {
       this.subscription.unsubscribe();
       this.subscription = undefined;
     }
     
-    // Clean up all event listeners
     this.eventListeners.forEach(cleanupFn => cleanupFn());
     this.eventListeners = [];
     
-    // Reset state
     this.state = 'loading';
     this.rows = [];
   }
 
   /**
-   * Legacy destroy method for backward compatibility.
-   * Calls cleanup() internally.
+   * @deprecated Use cleanup() instead
    */
   destroy() {
     this.cleanup();

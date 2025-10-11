@@ -27,13 +27,14 @@ import {
   type SubscriptionEventContextInterface as __SubscriptionEventContextInterface,
 } from "spacetimedb";
 
-export type JoinGroupchat = {
+export type SetGroupChatName = {
   groupchatId: number,
+  newName: string,
 };
 /**
  * An object for generated helper functions.
  */
-export const JoinGroupchat = {
+export const SetGroupChatName = {
   /**
   * A function which returns this type represented as an AlgebraicType.
   * This function is derived from the AlgebraicType used to generate this type.
@@ -42,19 +43,20 @@ export const JoinGroupchat = {
     return __AlgebraicTypeValue.Product({
       elements: [
         { name: "groupchatId", algebraicType: __AlgebraicTypeValue.U32},
+        { name: "newName", algebraicType: __AlgebraicTypeValue.String},
       ]
     });
   },
 
-  serialize(writer: __BinaryWriter, value: JoinGroupchat): void {
-    __AlgebraicTypeValue.serializeValue(writer, JoinGroupchat.getTypeScriptAlgebraicType(), value);
+  serialize(writer: __BinaryWriter, value: SetGroupChatName): void {
+    __AlgebraicTypeValue.serializeValue(writer, SetGroupChatName.getTypeScriptAlgebraicType(), value);
   },
 
-  deserialize(reader: __BinaryReader): JoinGroupchat {
-    return __AlgebraicTypeValue.deserializeValue(reader, JoinGroupchat.getTypeScriptAlgebraicType());
+  deserialize(reader: __BinaryReader): SetGroupChatName {
+    return __AlgebraicTypeValue.deserializeValue(reader, SetGroupChatName.getTypeScriptAlgebraicType());
   },
 
 }
 
-export default JoinGroupchat;
+export default SetGroupChatName;
 

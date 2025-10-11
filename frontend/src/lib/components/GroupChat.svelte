@@ -25,6 +25,8 @@
     let createGroupChatName = $state("");
     let changeNameModalOpen = $state(false);
     let newName = $state("");
+    let renameGroupChatModalOpen = $state(false);
+    let newGroupChatName = $state("");
 
     let messageInput = $state("");
 
@@ -42,6 +44,23 @@
         }
         spacetimeContext.connection.reducers.sendMessage(selectedGroupChat.id, messageInput);
         messageInput = ""; // Clear input after sending
+    }
+
+    const renameGroupChat = () => {
+        if (!spacetimeContext.connection) {
+            console.error("No connection available");
+            return;
+        }
+        if (newGroupChatName.trim() === "") {
+            return;
+        }
+        if (!selectedGroupChat) {
+            console.error("No groupchat selected");
+            return;
+        }
+        spacetimeContext.connection.reducers.setGroupChatName(selectedGroupChat.id, newGroupChatName);
+        newGroupChatName = "";
+        renameGroupChatModalOpen = false;
     }
 
 </script>
@@ -73,7 +92,7 @@
                             {#each groupChats.rows.filter(chat => clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
                                 <div class="my-1">
                                     <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
-                                        {chat.id}
+                                        {chat.name}
                                     </Button>
                                 </div>
                             {:else}
@@ -85,7 +104,7 @@
                             {#each groupChats.rows.filter(chat => !clientMemberships.rows.some(m => m.groupchatId === chat.id)) as chat}
                                 <div class="my-1">
                                     <Button class="w-100" outline={selectedGroupChat !== chat} onclick={() => {selectedGroupChat = chat}}>
-                                        {chat.id}
+                                        {chat.name}
                                     </Button>
                                 </div>
                             {/each}
@@ -101,7 +120,38 @@
                     <!-- HEADER -->
                     {#if selectedGroupChat}
                         <div class="flex-shrink-0">
-                            <h4>Group Chat {selectedGroupChat.id}</h4>
+                            <div class="d-flex align-items-center gap-2">
+                                <h4 class="mb-0">Group Chat: {selectedGroupChat.name}</h4>
+                                {#if spacetimeContext.identity && selectedGroupChat.createdBy.isEqual(spacetimeContext.identity)}
+                                    <Button 
+                                        size="sm" 
+                                        color="secondary" 
+                                        outline
+                                        onclick={() => {
+                                            if (selectedGroupChat) {
+                                                newGroupChatName = selectedGroupChat.name;
+                                                renameGroupChatModalOpen = true;
+                                            }
+                                        }}
+                                        title="Rename group chat"
+                                    >
+                                        ✏️
+                                    </Button>
+                                    <Modal 
+                                        body 
+                                        header="Rename Group Chat" 
+                                        isOpen={renameGroupChatModalOpen} 
+                                        toggle={() => renameGroupChatModalOpen = !renameGroupChatModalOpen}
+                                    >
+                                        <Input 
+                                            placeholder="New Group Chat Name" 
+                                            bind:value={newGroupChatName} 
+                                            onkeydown={(e) => e.key === 'Enter' && renameGroupChat()}
+                                        />
+                                        <Button class="mt-3" onclick={renameGroupChat}>Rename</Button>
+                                    </Modal>
+                                {/if}
+                            </div>
                             {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
                                 {#if messages.rows !== undefined}
                                     <div class="chat-header mb-3">

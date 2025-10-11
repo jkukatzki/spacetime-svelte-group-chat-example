@@ -28,7 +28,9 @@ import {
 } from "spacetimedb";
 
 export type GroupChat = {
-  id: string,
+  id: number,
+  name: string,
+  createdBy: __Identity,
 };
 /**
  * An object for generated helper functions.
@@ -41,7 +43,9 @@ export const GroupChat = {
   getTypeScriptAlgebraicType(): __AlgebraicTypeType {
     return __AlgebraicTypeValue.Product({
       elements: [
-        { name: "id", algebraicType: __AlgebraicTypeValue.String},
+        { name: "id", algebraicType: __AlgebraicTypeValue.U32},
+        { name: "name", algebraicType: __AlgebraicTypeValue.String},
+        { name: "createdBy", algebraicType: __AlgebraicTypeValue.createIdentityType()},
       ]
     });
   },
