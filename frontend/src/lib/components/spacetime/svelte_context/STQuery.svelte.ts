@@ -22,8 +22,6 @@ function snakeToCamel(tableName: string): string {
   return tableName.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
-
-
 /**
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
  * 
@@ -164,17 +162,6 @@ export class STQuery<
   private removeAtIndex(index: number): RowType[] {
     return [
       ...this.#actualRows.slice(0, index),
-      ...this.#actualRows.slice(index + 1)
-    ];
-  }
-
-  /**
-   * Create a new array with an item replaced at the specified index.
-   */
-  private replaceAtIndex(index: number, newItem: RowType): RowType[] {
-    return [
-      ...this.#actualRows.slice(0, index),
-      newItem,
       ...this.#actualRows.slice(index + 1)
     ];
   }
@@ -340,32 +327,6 @@ export class STQuery<
     });
   }
 
-  private updateRows(context: SpacetimeDBContext) {
-    if (!context.connection?.db) {
-      return;
-    }
-
-    const propertyName = this.getTableProperty(context);
-    if (!propertyName) {
-      this.rows = [];
-      return;
-    }
-
-    const table = context.connection.db[propertyName] as any;
-    if (table && 'iter' in table) {
-      const allRows = table.iter() as RowType[];
-      this.rows = this.whereClause
-        ? allRows.filter(row => evaluate(this.whereClause!, row))
-        : allRows;
-    } else {
-      this.rows = [];
-    }
-    
-    untrack(() => {
-      this.state = 'ready';
-    });
-  }
-
   /**
    * Clean up all subscriptions and event listeners.
    * Called automatically when effects are destroyed, or manually when needed.
@@ -388,16 +349,6 @@ export class STQuery<
    */
   destroy() {
     this.cleanup();
-  }
-
-  /**
-   * Update the where clause and refilter the data.
-   * This allows dynamic filtering of the reactive table.
-   */
-  setWhereClause(context: SpacetimeDBContext, whereClause?: Expr<keyof RowType & string>) {
-    this.whereClause = whereClause;
-    this.setupSubscription(context);
-    this.updateRows(context);
   }
 }
 
