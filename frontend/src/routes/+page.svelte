@@ -1,6 +1,6 @@
 <script>
 	import { DbConnection } from "$lib/components/spacetime/module_bindings";
-	import SpacetimeDBProvider from "$lib/components/spacetime/svelte_context/SpacetimeDBProvider.svelte";
+	import SpacetimeDBProvider from "$lib/components/spacetime/svelte_spacetime/SpacetimeDBProvider.svelte";
     import App from "../App.svelte";
     
     const connectionBuilder = DbConnection.builder()

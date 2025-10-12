@@ -1,7 +1,7 @@
 import { untrack } from 'svelte';
 import { createSubscriber } from 'svelte/reactivity';
-import { getSpacetimeContext, SpacetimeDBContext } from '../SpacetimeContext.svelte';
-import type { DbConnectionImpl, Identity } from 'spacetimedb';
+import { getSpacetimeContext, SpacetimeDBContext } from './SpacetimeContext.svelte';
+import type { DbConnectionImpl, Identity, SubscriptionBuilderImpl } from 'spacetimedb';
 import { evaluate, toQueryString, containsIsClient, type Expr, type Value } from './QueryFormatting';
 
 // Re-export query building utilities from React implementation
@@ -51,6 +51,15 @@ type ValidTableNamesForRowType<
     RowType extends TableNameToRowType<DbConnection>[TableName] ? TableName : never
 }[keyof TableNameToRowType<DbConnection>];
 
+
+export type SubscriptionHandleImpl<
+  DBView = any,
+  Reducers = any,
+  SetReducerFlags = any,
+> = {
+  unsubscribe: () => void;
+}
+
 /**
  * Reactive table class for Svelte 5 that provides real-time updates from SpacetimeDB.
  * 
@@ -64,7 +73,6 @@ type ValidTableNamesForRowType<
 export class STQuery<
   DbConnection extends DbConnectionImpl,
   RowType extends Record<string, any>,
-  TableName extends ValidTableName<DbConnection> = any
 > {
   #actualRows: RowType[] = $state([]);
   state: 'loading' | 'ready' = $state('loading');
@@ -73,7 +81,7 @@ export class STQuery<
   private tablePropertyName: string | null = null;
   private whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>;
   private callbacks?: UseQueryCallbacks<RowType>;
-  private subscription: any = undefined;
+  private subscription: SubscriptionHandleImpl<any, any, any> | undefined = undefined;
   private eventListeners: (() => void)[] = [];
   private subscribe: () => void;
 
@@ -95,37 +103,50 @@ export class STQuery<
       };
     });
 
-    const context = getSpacetimeContext();
+    
     
     try {
-      if (!context.connection || !context.connected) {
-        // Set up a watcher for when connection becomes available
-        this.setupConnectionWatcher(context);
+      const context = getSpacetimeContext();
+        $effect(() => {
+            // Watch for connection to become active
+            const isActive = context.connection.isActive;
+            
+     
+              // Clean up existing subscription if any
+              if (this.subscription) {
+                this.subscription.unsubscribe();
+              }
+              // Only subscribe if connection is active
+              if (!isActive) {
+                this.subscription?.unsubscribe();
+                return;
+              }
+              
+              // Build SQL query - convert camelCase table name to snake_case for SQL
+              const sqlTableName = camelToSnake(this.tableName);
+              const query = `SELECT * FROM ${sqlTableName}` +
+                (this.whereClause ? ` WHERE ${toQueryString(this.whereClause, context.connection.identity)}` : '');
+              
+              if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
+                this.subscription = context.connection
+                  .subscriptionBuilder()
+                  .onApplied(() => {
+                    this.state = 'ready';
+                  })
+                  .subscribe(query);
+              }
+           
+            
+          }
+        );
+        this.setupTableEventListeners(context);
         return;
-      }
     } catch {
       throw new Error(
         'Could not find SpacetimeDB client! Did you forget to add a ' +
           'SpacetimeDBProvider? STQuery must be used in the Svelte component tree ' +
           'under a SpacetimeDBProvider component.'
       );
-    }
-
-    this.initialize(context);
-    
-    // If whereClause contains isClient, watch for identity changes
-    if (this.whereClause && containsIsClient(this.whereClause)) {
-      $effect(() => {
-        // Access identity to trigger effect when it changes
-        const identity = context.identity;
-        
-        // Re-setup subscription with new identity
-        untrack(() => {
-          if (context.connection && context.connected) {
-            this.setupSubscription(context);
-          }
-        });
-      });
     }
   }
 
@@ -160,16 +181,6 @@ export class STQuery<
     this.tablePropertyName = snakeToCamel(this.tableName);
     
     return this.tablePropertyName;
-  }
-
-  private setupConnectionWatcher(context: SpacetimeDBContext) {
-    $effect(() => {
-      if (context.connection && context.connected) {
-        untrack(() => {
-          this.initialize(context);
-        });
-      }
-    });
   }
 
   /**
@@ -210,73 +221,8 @@ export class STQuery<
     ];
   }
 
-  private initialize(context: SpacetimeDBContext) {
-    if (!context.connection || !context.connected) {
-      return;
-    }
+ 
 
-    // Set up connection state listeners
-    const onConnect = () => {
-      untrack(() => {
-        this.rows = [];
-        this.setupSubscription(context);
-      });
-    };
-    const onDisconnect = () => {
-      untrack(() => {
-        this.state = 'loading';
-        this.rows = [];
-      });
-    };
-    const onConnectError = () => {
-      untrack(() => {
-        this.state = 'loading';
-      });
-    };
-
-    // Add event listeners if the client supports them
-    const clientWithEvents = context.connection as any;
-    if (clientWithEvents?.on && typeof clientWithEvents.on === 'function') {
-      clientWithEvents.on('connect', onConnect);
-      clientWithEvents.on('disconnect', onDisconnect);
-      clientWithEvents.on('connectError', onConnectError);
-      
-      this.eventListeners.push(() => {
-        clientWithEvents.off('connect', onConnect);
-        clientWithEvents.off('disconnect', onDisconnect);
-        clientWithEvents.off('connectError', onConnectError);
-      });
-    }
-
-    // Initial setup
-    this.setupSubscription(context);
-    this.setupTableEventListeners(context);
-  }
-
-  private setupSubscription(context: SpacetimeDBContext) {
-    if (!context.connection || !context.connected) {
-      return;
-    }
-
-    // Clean up previous subscription
-    if (this.subscription) {
-      this.subscription.unsubscribe();
-    }
-
-    // Build SQL query - convert camelCase table name to snake_case for SQL
-    const sqlTableName = camelToSnake(this.tableName);
-    const query = `SELECT * FROM ${sqlTableName}` +
-      (this.whereClause ? ` WHERE ${toQueryString(this.whereClause, context.identity)}` : '');
-    
-    if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
-      this.subscription = context.connection
-        .subscriptionBuilder()
-        .onApplied(() => {
-          this.state = 'ready';
-        })
-        .subscribe(query);
-    }
-  }
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
     if (!context.connection?.db) {
@@ -302,7 +248,7 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
-      if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
+      if (this.whereClause && !evaluate(this.whereClause, row, context.connection.identity)) {
         return;
       }
       
@@ -311,7 +257,7 @@ export class STQuery<
     };
 
     const onDelete = (ctx: any, row: RowType) => {
-      if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
+      if (this.whereClause && !evaluate(this.whereClause, row, context.connection.identity)) {
         return;
       }
       
@@ -324,7 +270,7 @@ export class STQuery<
     };
 
     const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
-      const change = classifyMembership(this.whereClause, oldRow, newRow, context.identity);
+      const change = classifyMembership(this.whereClause, oldRow, newRow, context.connection.identity);
       
       if (change === 'enter') {
         this.callbacks?.onInsert?.(newRow);
@@ -396,6 +342,7 @@ export class STQuery<
     this.cleanup();
   }
 }
+
 
 type MembershipChange = 'enter' | 'leave' | 'stayIn' | 'stayOut';
 

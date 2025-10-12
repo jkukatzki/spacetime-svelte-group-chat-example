@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row } from "@sveltestrap/sveltestrap";
-	import { STQuery, and, eq, isClient, not, where } from "./spacetime/svelte_context";
+	import { STQuery, and, eq, isClient, not, where } from "./spacetime/svelte_spacetime";
 	import { DbConnection, GroupChat, GroupChatMembership, Message } from "./spacetime/module_bindings";
-	import { getSpacetimeContext } from "./spacetime/SpacetimeContext.svelte";
+	import { getSpacetimeContext } from "./spacetime/svelte_spacetime/SpacetimeContext.svelte";
 	import { getContext } from "svelte";
 	import type { AppContext } from "$lib/AppContext.svelte";
 
@@ -63,7 +63,7 @@
         <Row class="gx-2 p-3 vh-100">
             <Col xs="2" class="h-100">
                 <div class="d-flex flex-column p-1 border rounded h-100">
-                    <div class="mb-1 flex-shrink-0">{spacetimeContext.connected ? "🟢 Connected" : "🟡 Connecting"}</div>
+                    <div class="mb-1 flex-shrink-0">{spacetimeContext.connection.identity ? "🟢 Connected" : "🟡 Connecting"}</div>
                     <!-- GROUP CHAT SELECTION -->
                     {#if groupChats.rows !== undefined}
                         <Button class="mb-3 flex-shrink-0" color="primary" onclick={() => createGroupChatModalOpen = true} disabled={!spacetimeContext.connected}>

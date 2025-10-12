@@ -6,11 +6,46 @@ export const SPACETIMEDB_CONTEXT_KEY = Symbol('spacetimedb');
 export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnectionImpl> {
   connection: DbConnection;
   error: Error | undefined = $state();
-  connected: boolean = $state(false);
-  identity: Identity | undefined = $state();
+  
+  // Reactive state that will be referenced by the connection's getters/setters
+  #identity = $state<Identity | undefined>();
+  #isActive = $state<boolean>(false);
+  
+  get identity(): Identity | undefined {
+    return this.#identity;
+  }
+  
+  get connected(): boolean {
+    return this.#isActive;
+  }
 
   constructor(connection: DbConnection) {
-    this.connection = $state<DbConnection>(connection);
+    // Store the original values
+    this.#identity = connection.identity;
+    this.#isActive = connection.isActive;
+    
+    // Replace the properties on the connection object with reactive getters/setters
+    // This allows direct access to connection.identity and connection.isActive
+    // while maintaining reactivity through our $state variables
+    Object.defineProperty(connection, 'identity', {
+      get: () => this.#identity,
+      set: (value: Identity | undefined) => {
+        this.#identity = value;
+      },
+      enumerable: true,
+      configurable: true
+    });
+    
+    Object.defineProperty(connection, 'isActive', {
+      get: () => this.#isActive,
+      set: (value: boolean) => {
+        this.#isActive = value;
+      },
+      enumerable: true,
+      configurable: true
+    });
+    
+    this.connection = connection;
   }
 }
 
