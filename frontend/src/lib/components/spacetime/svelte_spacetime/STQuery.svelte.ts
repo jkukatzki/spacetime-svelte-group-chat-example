@@ -69,6 +69,24 @@ export type SubscriptionHandleImpl<
  * - Supports filtered queries with WHERE clauses
  * - Handles onInsert, onDelete, and onUpdate callbacks
  * - Creates new object references to trigger Svelte's fine-grained reactivity
+ * 
+ * **Event Subscription Management:**
+ * Use the `.events` property to maintain subscriptions for event callbacks without
+ * needing to access `.rows`. The `.events` object has methods to register callbacks
+ * and reading any property on it keeps the subscription alive.
+ * 
+ * @example
+ * ```ts
+ * let pushMessages = $derived(new STQuery<DbConnection, Message>('message',
+ *   where(eq('userId', currentUser.id))
+ * ));
+ * 
+ * $effect(() => {
+ *   if (pushMessages.events) {
+ *     pushMessages.events.onInsert((msg) => showNotification(msg));
+ *   }
+ * });
+ * ```
  */
 export class STQuery<
   DbConnection extends DbConnectionImpl,
@@ -83,28 +101,55 @@ export class STQuery<
   private callbacks?: UseQueryCallbacks<RowType>;
   private subscription: SubscriptionHandleImpl<any, any, any> | undefined = undefined;
   private eventListeners: (() => void)[] = [];
-  private subscribe: () => void;
-
+  private subscribeRows: () => void;
+  private subscribeEvents: () => void;
+  
+  // Event subscription management
+  #eventCallbacks: UseQueryCallbacks<RowType> = {};
+  #eventsKeepAlive = $state(0);
+  
+  /**
+   * Events object for registering callbacks. Reading any property or calling any method
+   * on this object will keep the subscription alive for event handling.
+   */
+  events = {
+    onInsert: (callback: (row: RowType) => void) => {
+      this.subscribeEvents(); // Register event subscription
+      this.#eventsKeepAlive; // Keep subscription alive
+      this.#eventCallbacks.onInsert = callback;
+    },
+    onDelete: (callback: (row: RowType) => void) => {
+      this.subscribeEvents();
+      this.#eventsKeepAlive;
+      this.#eventCallbacks.onDelete = callback;
+    },
+    onUpdate: (callback: (oldRow: RowType, newRow: RowType) => void) => {
+      this.subscribeEvents();
+      this.#eventsKeepAlive;
+      this.#eventCallbacks.onUpdate = callback;
+    }
+  };
+  
   constructor(
     tableName: ValidTableNamesForRowType<DbConnection, RowType> & string,
-    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>,
-    callbacks?: UseQueryCallbacks<RowType>
+    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>
   ) {
     this.tableName = tableName;
     this.whereClause = whereClause;
-    this.callbacks = callbacks;
     
-    // Set up automatic cleanup using createSubscriber
-    this.subscribe = createSubscriber(() => {
-      // This function is called when the first effect reads this.rows
+    // Set up automatic cleanup using createSubscriber for rows
+    this.subscribeRows = createSubscriber(() => {
       return () => {
-        // This cleanup function is called when all effects are destroyed
         this.cleanup();
       };
     });
-
     
-    
+    // Set up automatic cleanup using createSubscriber for events
+    this.subscribeEvents = createSubscriber(() => {
+      return () => {
+        this.cleanup();
+      };
+    });    
     try {
       const context = getSpacetimeContext();
         $effect(() => {
@@ -125,16 +170,8 @@ export class STQuery<
               // Build SQL query - convert camelCase table name to snake_case for SQL
               const sqlTableName = camelToSnake(this.tableName);
               
-              // Debug: Log the where clause expression
-              if (this.whereClause) {
-                console.log(`[STQuery] Where clause expression for '${this.tableName}':`, JSON.stringify(this.whereClause, null, 2));
-              }
-              
               const query = `SELECT * FROM ${sqlTableName}` +
                 (this.whereClause ? ` WHERE ${toQueryString(this.whereClause, context.connection.identity)}` : '');
-              
-              // Debug: Log the generated query
-              console.log(`[STQuery] Generated SQL for table '${this.tableName}':`, query);
               
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
                 this.subscription = context.connection
@@ -165,12 +202,29 @@ export class STQuery<
    */
   get rows(): RowType[] {
     // Register this access with the subscriber
-    this.subscribe();
+    this.subscribeRows();
+    
     return this.#actualRows;
   }
 
   private set rows(newRows: RowType[]) {
     this.#actualRows = newRows;
+  }
+
+  /**
+   * Simple property that can be read to keep the subscription alive.
+   * Useful when you only want to use callbacks and don't care about the rows.
+   * 
+   * @example
+   * ```ts
+   * let pushMessages = $derived(new STQuery(..., { onInsert: handleInsert }));
+   * // Read this to keep subscription alive:
+   * $effect(() => { pushMessages?.active; });
+   * ```
+   */
+  get active(): boolean {
+    this.subscribeRows();
+    return this.state === 'ready';
   }
 
   /**
@@ -253,10 +307,8 @@ export class STQuery<
       
       // Initialize the rows array with filtered cached rows
       this.#actualRows = filteredRows;
-      
-      console.log(`[STQuery] Initialized ${filteredRows.length} rows from cache for table '${this.tableName}'`);
     } catch (error) {
-      console.error(`[STQuery] Failed to initialize from cache for table '${this.tableName}':`, error);
+      // Silently handle cache initialization errors
     }
   }
 
@@ -270,7 +322,6 @@ export class STQuery<
 
     const propertyName = this.getTableProperty(context);
     if (!propertyName) {
-      console.error('STQuery: Could not find table property for:', this.tableName);
       return;
     }
 
@@ -294,7 +345,9 @@ export class STQuery<
         return;
       }
       
+      // Call both constructor callbacks and event callbacks
       this.callbacks?.onInsert?.(row);
+      this.#eventCallbacks.onInsert?.(row);
       this.#actualRows = [...this.#actualRows, row];
     };
 
@@ -303,7 +356,9 @@ export class STQuery<
         return;
       }
       
+      // Call both constructor callbacks and event callbacks
       this.callbacks?.onDelete?.(row);
+      this.#eventCallbacks.onDelete?.(row);
       
       const index = this.findRowIndex(row, pkField);
       if (index !== -1) {
@@ -316,15 +371,18 @@ export class STQuery<
       
       if (change === 'enter') {
         this.callbacks?.onInsert?.(newRow);
+        this.#eventCallbacks.onInsert?.(newRow);
         this.#actualRows = [...this.#actualRows, newRow];
       } else if (change === 'leave') {
         this.callbacks?.onDelete?.(oldRow);
+        this.#eventCallbacks.onDelete?.(oldRow);
         const index = this.findRowIndex(oldRow, pkField);
         if (index !== -1) {
           this.#actualRows = this.removeAtIndex(index);
         }
       } else if (change === 'stayIn') {
         this.callbacks?.onUpdate?.(oldRow, newRow);
+        this.#eventCallbacks.onUpdate?.(oldRow, newRow);
         
         const index = this.findRowIndex(oldRow, pkField);
         if (index !== -1) {
@@ -418,93 +476,6 @@ type CamelToSnake<S extends string> = S extends `${infer First}${infer Rest}`
  * Union type that accepts both camelCase and snake_case versions of column names.
  */
 type ColumnNameVariants<T extends string> = T | CamelToSnake<T>;
-
-/**
- * Union of all valid table names (camelCase from db properties OR snake_case SQL names).
- */
-type ValidTableName<DbConnection extends DbConnectionImpl> = 
-  | keyof DbConnection['db'] & string
-  | CamelToSnake<keyof DbConnection['db'] & string>;
-
-/**
- * Find the db property key that corresponds to the given table name (handles both camelCase and snake_case).
- */
-type TableNameToDbKey<
-  DbConnection extends DbConnectionImpl,
-  TableName extends string
-> = TableName extends keyof DbConnection['db']
-  ? TableName
-  : {
-      [K in keyof DbConnection['db']]: CamelToSnake<K & string> extends TableName ? K : never
-    }[keyof DbConnection['db']];
-
-/**
- * Assert that RowType matches the actual table row type.
- * This creates a compile-time check that will fail if the types don't match.
- */
-type AssertRowTypeMatches<
-  DbConnection extends DbConnectionImpl,
-  RowType,
-  TableName extends ValidTableName<DbConnection>
-> = RowType extends ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>
-  ? TableName
-  : { ERROR: 'RowType does not match table row type'; expected: ExtractRowType<DbConnection['db'][TableNameToDbKey<DbConnection, TableName & string>]>; got: RowType };
-
-/**
- * Type alias for backward compatibility.
- * Use STQuery class directly instead.
- * @deprecated Use STQuery class instead
- */
-export type ReactiveTable<T extends Record<string, any>> = STQuery<any, T>;
-
-/**
- * Legacy factory function for backward compatibility.
- * @deprecated Use new STQuery<DbConnection, RowType>('table_name', ...) instead
- */
-export function createReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType extends Record<string, any>,
-  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
->(
-  tableName: TableName,
-  where: Expr<ColumnsFromRow<RowType>> & AssertRowTypeMatches<DbConnection, RowType, TableName>,
-  callbacks?: UseQueryCallbacks<RowType>
-): STQuery<DbConnection, RowType>;
-
-export function createReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType extends Record<string, any>,
-  TableName extends ValidTableName<DbConnection> = ValidTableName<DbConnection>,
->(
-  tableName: TableName & AssertRowTypeMatches<DbConnection, RowType, TableName>,
-  callbacks?: UseQueryCallbacks<RowType>
-): STQuery<DbConnection, RowType>;
-
-export function createReactiveTable<
-  DbConnection extends DbConnectionImpl,
-  RowType extends Record<string, any>,
->(
-  tableName: string,
-  whereClauseOrCallbacks?: Expr<ColumnsFromRow<RowType>> | UseQueryCallbacks<RowType>,
-  callbacks?: UseQueryCallbacks<RowType>
-): STQuery<DbConnection, RowType> {
-  let whereClause: Expr<ColumnsFromRow<RowType>> | undefined;
-  let actualCallbacks: UseQueryCallbacks<RowType> | undefined;
-  
-  // Handle different parameter combinations
-  if (whereClauseOrCallbacks) {
-    if (typeof whereClauseOrCallbacks === 'object' && 'type' in whereClauseOrCallbacks) {
-      // First param is where clause
-      whereClause = whereClauseOrCallbacks as Expr<ColumnsFromRow<RowType>>;
-      actualCallbacks = callbacks;
-    } else {
-      // First param is callbacks
-      actualCallbacks = whereClauseOrCallbacks as UseQueryCallbacks<RowType>;
-    }
-  }
-
-  return new STQuery<DbConnection, RowType>(tableName as any, whereClause as any, actualCallbacks);
-}
 
 /**
  * Compatibility function for the original getReactiveTable API.

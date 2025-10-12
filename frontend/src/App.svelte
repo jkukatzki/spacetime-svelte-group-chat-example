@@ -4,15 +4,21 @@
 	import { DbConnection, GroupChat, GroupChatMembership, Message, User } from "./lib/components/spacetime/module_bindings";
 	import { getSpacetimeContext } from "./lib/components/spacetime/svelte_spacetime/SpacetimeContext.svelte";
 
-    let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user', undefined, {});
+    let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user', undefined);
     let clientUserTable = new STQuery<DbConnection, User>('user', where(isClient('identity'))); 
     
     // Derive the specific user from the table's rows
     let clientUser: User | undefined = $derived(clientUserTable.rows[0]);
-   
+    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(isClient('identity')));
+    
     let spacetimeContext = getSpacetimeContext<DbConnection>();
 
-    let selectedGroupChat: GroupChat | undefined = $state();
+    let selectedGroupChat: GroupChat | undefined = $derived.by(() => {
+        if (clientMemberships.rows.length > 0) {
+            // Auto-selecting group chat based on new membership
+            return groupChats.rows?.find(chat => chat.id === clientMemberships.rows[clientMemberships.rows.length - 1].groupchatId);
+        }
+    });
     
     let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
     let groupChatMessages = $derived(!selectedGroupChat ? null : new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id))));
@@ -27,35 +33,29 @@
         }
     });
 
-    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(isClient('identity')));
-    let clientRelevantMessages = $derived.by(() => {
+    // listen to all events on group chats we are part of except the currently selected one
+    let clientPushMessages = $derived.by(() => {
         if (clientMemberships.rows.length === 0) {
             return null;
         } else {
             return new STQuery<DbConnection, Message>('message',
-                where(or(...clientMemberships.rows.filter(m => m.groupchatId != selectedGroupChat?.id).map(m => eq('groupchatId', m.groupchatId)))),
-            {
-                    onInsert: (newRow) => {
-                        console.log("New relevant message received:", newRow);
-                        const messageUser = users.rows.find(user => user.identity.isEqual(newRow.sender));
-                        if (messageUser) {
-                            messageToast.isOpen = true;
-                            messageToast.sender = messageUser;
-                            messageToast.message = newRow;
-                        }
-                    }
-                }
+                where(or(...clientMemberships.rows.filter(m => m.groupchatId != selectedGroupChat?.id).map(m => eq('groupchatId', m.groupchatId))))
             );
         }
     });
-    $inspect(clientRelevantMessages?.rows);
 
     $effect(() => {
-        if (clientMemberships.rows.length > 0) {
-            // Auto-selecting group chat based on new membership
-            selectedGroupChat = groupChats.rows?.find(chat => chat.id === clientMemberships.rows[clientMemberships.rows.length - 1].groupchatId);
+        if (clientPushMessages) {
+            clientPushMessages.events.onInsert((newRow) => {
+                const messageUser = users.rows.find(user => user.identity.isEqual(newRow.sender));
+                if (messageUser) {
+                    messageToast.isOpen = true;
+                    messageToast.sender = messageUser;
+                    messageToast.message = newRow;
+                }
+            });
         }
-    })
+    });
 
     let createGroupChatModalOpen = $state(false);
     let createGroupChatName = $state("");
@@ -63,6 +63,35 @@
     let newName = $state("");
 
     let messageInput = $state("");
+    
+    // Scroll management for messages
+    let messagesContainer: HTMLDivElement | undefined = $state();
+    function isScrolledToBottom(element: HTMLDivElement): boolean {
+        return element.scrollHeight - element.scrollTop - element.clientHeight < 10;
+    }
+    function scrollToBottom() {
+        if (messagesContainer) {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+    }
+    
+    // Check scroll position BEFORE DOM updates
+    $effect.pre(() => {
+        if (groupChatMessages?.rows && messagesContainer) {
+            if (isScrolledToBottom(messagesContainer)) {
+                // If already at bottom, prepare to scroll after update
+                requestAnimationFrame(() => scrollToBottom());
+            }
+        }
+    });
+    
+    // Auto-scroll when selecting a new group chat
+    $effect(() => {
+        if (selectedGroupChat && messagesContainer) {
+            // Always scroll to bottom when changing chats
+            requestAnimationFrame(() => scrollToBottom());
+        }
+    });
 
     const sendMessage = () => {
         if (!spacetimeContext.connection) {
@@ -159,7 +188,7 @@
                             {#if groupChatMessages?.rows !== undefined}
                                 <!-- MESSAGES AND MESSAGE INPUT -->
                                 <div class="d-flex flex-column flex-grow-1" style="min-height: 0;">
-                                    <div class="flex-grow-1 overflow-auto mb-3">
+                                    <div class="flex-grow-1 overflow-auto mb-3" bind:this={messagesContainer}>
                                         {#each groupChatMessages?.rows as message}
                                             <Card class="mb-2">
                                                 <CardHeader>{users.rows.find(u => u.identity.toHexString() === message.sender.toHexString())?.name ?? message.sender.toHexString().slice(-6)} <small class="float-left fs-7 text-muted">at {new Date(message.sent.toDate()).toLocaleTimeString()}</small></CardHeader>
@@ -251,11 +280,17 @@
     <p>Connecting to SpacetimeDB...</p>
 {/if}
 
+<!-- MESSAGE TOAST -->
 <div class="position-fixed bottom-0 end-0 p-3 z-3">
-    <Toast autohide isOpen={messageToast.isOpen} on:close={() => (messageToast.isOpen = false)}>
-    <ToastHeader>{messageToast.sender.name ?? messageToast.sender.identity.toHexString().slice(-6)} in {messageToast.message.groupchatId}:</ToastHeader>
-    <ToastBody>
-        {`${messageToast.message.text}`}
-    </ToastBody>
+    <Toast
+        style="cursor: pointer"
+        isOpen={messageToast.isOpen}
+        on:close={() => (messageToast.isOpen = false)}
+        onclick={() => (selectedGroupChat = groupChats.rows.find(chat => chat.id === messageToast.message.groupchatId))}
+    >
+        <ToastHeader>{messageToast.sender.name ?? messageToast.sender.identity.toHexString().slice(-6)} in {messageToast.message.groupchatId}:</ToastHeader>
+        <ToastBody>
+            {`${messageToast.message.text}`}
+        </ToastBody>
     </Toast>
 </div>
