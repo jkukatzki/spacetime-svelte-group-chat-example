@@ -33,7 +33,7 @@
         }
     });
 
-    // listen to all events on group chats we are part of except the currently selected one
+    // create query to all group chats we are part of except the currently selected one
     let clientPushMessages = $derived.by(() => {
         if (clientMemberships.rows.length === 0) {
             return null;
@@ -44,6 +44,7 @@
         }
     });
 
+    // add callbacks to relevant client messages
     $effect(() => {
         if (clientPushMessages) {
             clientPushMessages.events.onInsert((newRow) => {
@@ -283,6 +284,7 @@
 <!-- MESSAGE TOAST -->
 <div class="position-fixed bottom-0 end-0 p-3 z-3">
     <Toast
+        autohide
         style="cursor: pointer"
         isOpen={messageToast.isOpen}
         on:close={() => (messageToast.isOpen = false)}

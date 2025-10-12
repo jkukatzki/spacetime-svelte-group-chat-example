@@ -65,6 +65,7 @@ The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB 
 - **Automatic subscriptions** that clean up when no longer needed
 - **Reactive state** on its .rows variable
 - **WHERE clause filtering** with type-checked column names
+- **Per Query client side filtering** the spacetimeDB sdk compiles all queries into one but the rows inside the query are filtered according to the where clause
 
 ### Constructor
 
@@ -103,8 +104,15 @@ But for now:
 
 ```svelte
 // Filtered query - get messages for specific group chat
-let groupChatMessages = $derived(!selectedGroupChat ? null : new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id))));
-
+let groupChatMessages = $derived.by(() => {
+  if(!selectedGroupChat) {
+    return null;
+  } else {
+    return new STQuery<DbConnection, Message>('message',
+      where(eq('groupchatId', selectedGroupChat.id)))
+    );
+  }
+);
 ```
 
 ## Query Building with WHERE Clauses
