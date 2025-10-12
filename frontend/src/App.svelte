@@ -113,7 +113,7 @@
     class MessageToast {
         isOpen = $state(false);
         message: Message = $state({} as Message);
-        sender: User = $state({} as User);
+        senderUser: User = $state({} as User);
     }
 
     const messageToast = new MessageToast();
@@ -290,7 +290,7 @@
         on:close={() => (messageToast.isOpen = false)}
         onclick={() => (selectedGroupChat = groupChats.rows.find(chat => chat.id === messageToast.message.groupchatId))}
     >
-        <ToastHeader>{messageToast.senderUser.name ?? messageToast.sender.identity.toHexString().slice(-6)} in {messageToast.message.groupchatId}:</ToastHeader>
+        <ToastHeader>{messageToast.senderUser.name ?? messageToast.message.sender.toHexString().slice(-6)} in {messageToast.message.groupchatId}:</ToastHeader>
         <ToastBody>
             {`${messageToast.message.text}`}
         </ToastBody>
