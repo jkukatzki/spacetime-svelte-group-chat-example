@@ -4,7 +4,7 @@
 	import { DbConnection, GroupChat, GroupChatMembership, Message, User } from "./lib/components/spacetime/module_bindings";
 	import { getSpacetimeContext } from "./lib/components/spacetime/svelte_spacetime/SpacetimeContext.svelte";
 
-    let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user', undefined);
+    let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user');
     let clientUserTable = new STQuery<DbConnection, User>('user', where(isClient('identity'))); 
     
     // Derive the specific user from the table's rows
@@ -33,7 +33,7 @@
         }
     });
 
-    // create query to all group chats we are part of except the currently selected one
+    // create additional message query to all group chats we are part of except the currently selected
     let clientPushMessages = $derived.by(() => {
         if (clientMemberships.rows.length === 0) {
             return null;
@@ -44,14 +44,14 @@
         }
     });
 
-    // add callbacks to relevant client messages
+    // add callbacks to the 
     $effect(() => {
         if (clientPushMessages) {
             clientPushMessages.events.onInsert((newRow) => {
-                const messageUser = users.rows.find(user => user.identity.isEqual(newRow.sender));
-                if (messageUser) {
+                const senderUser = users.rows.find(user => user.identity.isEqual(newRow.sender));
+                if (senderUser) {
                     messageToast.isOpen = true;
-                    messageToast.sender = messageUser;
+                    messageToast.senderUser = senderUser;
                     messageToast.message = newRow;
                 }
             });
@@ -290,7 +290,7 @@
         on:close={() => (messageToast.isOpen = false)}
         onclick={() => (selectedGroupChat = groupChats.rows.find(chat => chat.id === messageToast.message.groupchatId))}
     >
-        <ToastHeader>{messageToast.sender.name ?? messageToast.sender.identity.toHexString().slice(-6)} in {messageToast.message.groupchatId}:</ToastHeader>
+        <ToastHeader>{messageToast.senderUser.name ?? messageToast.sender.identity.toHexString().slice(-6)} in {messageToast.message.groupchatId}:</ToastHeader>
         <ToastBody>
             {`${messageToast.message.text}`}
         </ToastBody>
