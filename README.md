@@ -1,12 +1,16 @@
 # SpacetimeDB + Svelte 5 (requires "svelte": "^5.39.11")
 
+https://github.com/ClockworkLabs/SpacetimeDB
+https://github.com/sveltejs/svelte
+https://github.com/sveltestrap/sveltestrap
+
 ### WORK IN PROGRESS - FOR BUG REPORTS AND FEATURE REQUESTS FILE AN ISSUE ###
 ### NO FINAL DESIGN DECISIONS HAVE BEEN MADE, FEEL FREE TO SUGGEST CHANGES ###
 ### THE BINDINGS WILL BE IN A SEPARATE PACKAGE IN THE FUTURE ###
 A reactive, type-safe integration layer for SpacetimeDB with Svelte 5's runes system. 
 
 <p align="center">
-  <img width="60%" alt="dog_groupchat" src="https://github.com/user-attachments/assets/0190bdd8-65e9-46ec-8b9c-bde20a09bca3" />
+  <img width="70%" alt="dog_groupchat" src="https://github.com/user-attachments/assets/0190bdd8-65e9-46ec-8b9c-bde20a09bca3" />
 </p>
 
 [If you just wanna look at the example](frontend/src/App.svelte)
@@ -65,8 +69,8 @@ The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB 
 - **Automatic subscriptions** that clean up when no longer needed
 - **Reactive state** on its .rows variable
 - **WHERE clause filtering** with type-checked column names
-- **Per Query client side filtering** the spacetimeDB sdk compiles all queries into one but the rows inside the query are filtered according to the where clause
-
+- **Per Query client side filtering** since the SpacetimeDB SDK callbacks belonging to a table are combined and don't hold information to what query they were called by
+  // This could be improved by bypassing the filtering if the table has only one subscription that could be registered in the SpacetimeContext
 ### Constructor
 
 ```typescript
