@@ -124,8 +124,17 @@ export class STQuery<
               
               // Build SQL query - convert camelCase table name to snake_case for SQL
               const sqlTableName = camelToSnake(this.tableName);
+              
+              // Debug: Log the where clause expression
+              if (this.whereClause) {
+                console.log(`[STQuery] Where clause expression for '${this.tableName}':`, JSON.stringify(this.whereClause, null, 2));
+              }
+              
               const query = `SELECT * FROM ${sqlTableName}` +
                 (this.whereClause ? ` WHERE ${toQueryString(this.whereClause, context.connection.identity)}` : '');
+              
+              // Debug: Log the generated query
+              console.log(`[STQuery] Generated SQL for table '${this.tableName}':`, query);
               
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
                 this.subscription = context.connection
@@ -221,6 +230,36 @@ export class STQuery<
     ];
   }
 
+  /**
+   * Initialize rows from the client cache.
+   * This populates the STQuery with existing cached rows that match the WHERE clause.
+   */
+  private initializeFromCache(context: SpacetimeDBContext, table: any) {
+    // Access the table cache's iter() method to get all cached rows
+    if (!table.tableCache || typeof table.tableCache.iter !== 'function') {
+      return;
+    }
+    
+    try {
+      const cachedRows: RowType[] = table.tableCache.iter();
+      
+      // Filter rows based on the WHERE clause
+      const filteredRows = cachedRows.filter(row => {
+        if (!this.whereClause) {
+          return true; // No filter, include all rows
+        }
+        return evaluate(this.whereClause, row, context.connection.identity);
+      });
+      
+      // Initialize the rows array with filtered cached rows
+      this.#actualRows = filteredRows;
+      
+      console.log(`[STQuery] Initialized ${filteredRows.length} rows from cache for table '${this.tableName}'`);
+    } catch (error) {
+      console.error(`[STQuery] Failed to initialize from cache for table '${this.tableName}':`, error);
+    }
+  }
+
  
 
 
@@ -239,6 +278,9 @@ export class STQuery<
     if (!table || !('onInsert' in table)) {
       return;
     }
+    
+    // Initialize rows from the cache
+    this.initializeFromCache(context, table);
     
     // Extract the primary key field name from the table's metadata
     const pkField: string | undefined = table.tableCache?.tableTypeInfo?.primaryKey;
