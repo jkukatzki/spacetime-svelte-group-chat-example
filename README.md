@@ -1,7 +1,9 @@
 # SpacetimeDB + Svelte 5 (requires "svelte": "^5.39.11")
 
 https://github.com/ClockworkLabs/SpacetimeDB
+
 https://github.com/sveltejs/svelte
+
 https://github.com/sveltestrap/sveltestrap
 
 ### WORK IN PROGRESS - FOR BUG REPORTS AND FEATURE REQUESTS FILE AN ISSUE ###
@@ -69,8 +71,8 @@ The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB 
 - **Automatic subscriptions** that clean up when no longer needed
 - **Reactive state** on its .rows variable
 - **WHERE clause filtering** with type-checked column names
-- **Per Query client side filtering** since the SpacetimeDB SDK callbacks belonging to a table are combined and don't hold information to what query they were called by
-  // This could be improved by bypassing the filtering if the table has only one subscription that could be registered in the SpacetimeContext
+- **Per Query client side filtering** - since the SpacetimeDB SDK combines all queries related to a table we filter on the client callbacks again with the same query conditions // This could be improved by registering all subscriptions and only filter if there's more than one
+
 ### Constructor
 
 ```typescript
@@ -103,11 +105,12 @@ constructor(
 
 ### With reactive WHERE Clause
 
-#### This example shows the reconstruction of the class when a rune inside the derived changes, this workflow might be replaced by creating a new class with reactive states describing the WHERE clause and listening to changes inside the STQuery class. (This would prevent unnecessary reconstruction if we're just trying to query by distance to other objects or chunk id in a game)
+#### This example shows the reconstruction of the STQuery class instance when a rune inside the derived changes, this workflow might be replaced by adding a new class with reactive values needed for building the where clause and listening to those changes inside STQuery using $effect and then resubscribing with new paramters. (This would prevent unnecessary reconstruction if we're just trying to query by distance to other objects or by chunk id in a game and don't want to lose the object references because the array gets reconstructed)
 But for now:
 
 ```svelte
 // Filtered query - get messages for specific group chat
+
 let groupChatMessages = $derived.by(() => {
   if(!selectedGroupChat) {
     return null;
@@ -136,7 +139,7 @@ where(eq('groupchatId', 123))
 // SQL: WHERE groupchat_id = 123
 ```
 ### NOT INCLUDED IN REACT IMPLEMENTATION
-#### since we cannot query by optional column values, undefined is prohibited as a value, but as identity is only defined once we connect the isClient helper function is provided to avoid boilerplate code and listens to the change inside of STQuery
+#### since we cannot query by optional column values, undefined is prohibited as a value, but as identity is only defined once we connect the isClient function is used to automatically start the query once it is defined.
 #### `isClient(column)` - Match Client Identity 
 
 ```typescript
@@ -176,15 +179,11 @@ where(or(
 
 ```typescript
 // Get messages from multiple group chats, excluding the current user's messages
-let messages = new STQuery<DbConnection, Message>(
-  'message',
+// to display push messages
+let messages = new STQuery<DbConnection, Message>('message',
   where(
     and(
-      or(
-        eq('groupchatId', 123),
-        eq('groupchatId', 456),
-        eq('groupchatId', 789)
-      ),
+      or(...clientMemberships.rows.map(m => eq('groupchatId', m.groupchatId))),
       not(isClient('sender'))
     )
   )
@@ -195,8 +194,11 @@ let messages = new STQuery<DbConnection, Message>(
 
 ## Event Callbacks
 
-Since we track state dependencies (like the .rows variable) to clean up the STDB Subscription once they are not needed anymore and there might be cases where you don't need the rows but just want to add callbacks we add dependencies by using an effect to bind to the event callbacks.
+Since we track state dependencies (like the .rows variable) to clean up the STDB Subscription once they are not needed anymore.
+But there might be cases where you don't need the rows but instead just want to add callbacks or the rows dependency is conditional.
+Which is why we add a dependency to the events variable too by using an $effect to register our callbacks.
 I couldn't think of a cleaner way to do this in svelte so feel free to suggest improvements to this system.
+Also I couldn't get typescript working to disallow adding onUpdate and onDelete callbacks on tables that don't have a primary key.
 
 ```svelte
 <script lang="ts">

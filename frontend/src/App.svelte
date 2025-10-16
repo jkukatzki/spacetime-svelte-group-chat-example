@@ -33,7 +33,8 @@
         }
     });
 
-    // create additional message query to all group chats we are part of except the currently selected
+    // create additional message query to all group chats we are part of,
+    // except the currently selected one
     let clientPushMessages = $derived.by(() => {
         if (clientMemberships.rows.length === 0) {
             return null;
@@ -44,7 +45,7 @@
         }
     });
 
-    // add callbacks to the 
+    // add callbacks to the clientpushmessages query to display toast message
     $effect(() => {
         if (clientPushMessages) {
             clientPushMessages.events.onInsert((newRow) => {
