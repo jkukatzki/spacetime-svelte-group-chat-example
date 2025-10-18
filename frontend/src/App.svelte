@@ -3,6 +3,7 @@
 	import { STQuery, and, eq, not, or, where } from "./lib/components/spacetime/svelte_spacetime";
 	import { DbConnection, GroupChat, GroupChatMembership, Message, User } from "./lib/components/spacetime/module_bindings";
 	import { getSpacetimeContext } from "./lib/components/spacetime/svelte_spacetime/SpacetimeContext.svelte";
+	import { bottomScroll } from "$lib/bottomScroll";
 
     useColorMode('dark');
     let spacetimeContext = getSpacetimeContext<DbConnection>();
@@ -68,22 +69,11 @@
     
     // Scroll management for messages
     let messagesContainer: HTMLDivElement | undefined = $state();
-    function isScrolledToBottom(element: HTMLDivElement): boolean {
-        return element.scrollHeight - element.scrollTop - element.clientHeight < 10;
-    }
-    function scrollToBottom() {
-        if (messagesContainer) {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        }
-    }
     
     // Check scroll position BEFORE DOM updates
     $effect.pre(() => {
         if (groupChatMessages?.rows && messagesContainer) {
-            if (isScrolledToBottom(messagesContainer)) {
-                // If already at bottom, prepare to scroll after update
-                requestAnimationFrame(() => scrollToBottom());
-            }
+            bottomScroll(messagesContainer);
         }
     });
     
@@ -91,20 +81,12 @@
     $effect(() => {
         if (selectedGroupChat && messagesContainer) {
             // Always scroll to bottom when changing chats
-            requestAnimationFrame(() => scrollToBottom());
+            bottomScroll(messagesContainer, false);
         }
     });
 
     const sendMessage = () => {
-        if (!spacetimeContext.connection) {
-            console.error("No connection available");
-            return;
-        }
-        if (messageInput.trim() === "") {
-            return;
-        }
-        if (!selectedGroupChat) {
-            console.error("No groupchat selected");
+        if (!selectedGroupChat || !spacetimeContext.connection || messageInput.trim() === "") {
             return;
         }
         spacetimeContext.connection.reducers.sendMessage(selectedGroupChat.id, messageInput);

@@ -1,4 +1,4 @@
-# SpacetimeDB + Svelte 5 (requires "svelte": "^5.39.11")
+# SpacetimeDB + Svelte 5 (requires "svelte": "^5.41.0")
 
 https://github.com/ClockworkLabs/SpacetimeDB
 
@@ -137,16 +137,9 @@ import { where, eq, and, or, not, type ClientIdentity } from './lib/components/s
 ```typescript
 where(eq('groupchatId', 123))
 // SQL: WHERE groupchat_id = 123
-```
-### Working with Identities
 
-The `eq` helper accepts the branded `ClientIdentity | undefined` that comes from `spacetimeContext.connection.identity`. When the identity is not available yet, `eq` returns a _pending_ expression so the query simply waits until the connection finishes:
-
-```typescript
-const identity = spacetimeContext.connection.identity;
-
-const clientUserQuery = new STQuery<DbConnection, User>('user', where(eq('identity', identity)));
-// When `identity` is undefined, the underlying subscription is deferred until it becomes available.
+where(eq('identity', someIdentity))
+// SQL: WHERE identity = 0x...
 ```
 
 ### NOT INCLUDED IN REACT IMPLEMENTATION
@@ -181,7 +174,7 @@ where(or(
 
 ```typescript
 // Get messages from multiple group chats, excluding the current user's messages
-// to display push messages
+// to display them as toasts
 const identity = spacetimeContext.connection.identity;
 
 const messagesQuery = new STQuery<DbConnection, Message>('message',
