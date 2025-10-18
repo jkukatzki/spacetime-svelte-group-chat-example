@@ -31,7 +31,6 @@
     [REFCOUNT_SYMBOL]?: number;
     [DISCONNECT_TIMER_SYMBOL]?: ReturnType<typeof setTimeout>;
   };
-
   const builderWithCache = connectionBuilder as CachedBuilder;
 
   if (builderWithCache[DISCONNECT_TIMER_SYMBOL]) {
@@ -47,10 +46,6 @@
   }
 
   builderWithCache[REFCOUNT_SYMBOL] = (builderWithCache[REFCOUNT_SYMBOL] ?? 0) + 1;
-
-  if (!connection) {
-    throw new Error('Failed to initialize SpacetimeDB connection.');
-  }
 
   // Create the reactive context - the proxy inside will track connection property changes
   const spacetimeContext: SpacetimeDBContext = new SpacetimeDBContext(connection);

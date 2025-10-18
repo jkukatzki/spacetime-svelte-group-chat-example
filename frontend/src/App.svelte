@@ -20,34 +20,31 @@
     });
     
     let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
-    let groupChatMessages = $derived(!selectedGroupChat ? null : new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id))));
-    
-    let groupChatMembers = $derived( selectedGroupChat ?
-            new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
-                where(
-                    and(
-                        eq('groupchatId', selectedGroupChat.id),
-                        not(eq('identity', spacetimeContext.connection.identity))
-                    )
+    let groupChatMessages = $derived(
+        !selectedGroupChat ? null :
+        new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)))
+    );
+    let groupChatMembers = $derived(
+        !selectedGroupChat ? null :
+        new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
+            where(
+                and(
+                    eq('groupchatId', selectedGroupChat.id),
+                    not(eq('identity', spacetimeContext.connection.identity))
                 )
             )
-            :
-            undefined
+        )
     );
 
-    // create additional message query to all group chats we are part of,
-    // except the currently selected one
-    let clientPushMessages = $derived.by(() => {
-        if (clientMemberships.rows.length === 0) {
-            return null;
-        } else {
-            return new STQuery<DbConnection, Message>('message',
-                where(or(...clientMemberships.rows.filter(m => m.groupchatId != selectedGroupChat?.id).map(m => eq('groupchatId', m.groupchatId))))
-            );
-        }
-    });
-
-    // add callbacks to the clientpushmessages query to display toast message
+    // establish a query for incoming messages in all
+    // group chats we are part of except the one we're currently viewing
+    let clientPushMessages = $derived(
+        !clientMemberships.rows.length ? null :
+        new STQuery<DbConnection, Message>('message',
+            where(or(...clientMemberships.rows.filter(m => m.groupchatId != selectedGroupChat?.id).map(m => eq('groupchatId', m.groupchatId))))
+        )
+    );
+    // add callbacks to the clientPushMessages query to display toast message
     $effect(() => {
         if (clientPushMessages) {
             clientPushMessages.events.onInsert((newRow) => {
@@ -252,7 +249,6 @@
                         {#each groupChatMembers.rows as membership}
                             <div class="ms-2">
                                 {#if users}
-
                                     <Badge 
                                         pill={true}
                                         color={['primary', 'danger', 'success', 'warning'][membership.identity.toHexString().charCodeAt(0) % 4]}

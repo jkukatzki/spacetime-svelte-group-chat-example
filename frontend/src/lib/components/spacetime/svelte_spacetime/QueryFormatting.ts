@@ -201,6 +201,9 @@ export function evaluate<Column extends string, RowType = any>(
       return concreteExpr.children.every(child => evaluate(child, row, clientIdentity));
     case 'or':
       return concreteExpr.children.some(child => evaluate(child, row, clientIdentity));
+    case 'pending':
+      // This should never happen since we resolve pending expressions at the start
+      return false;
   }
 }
 
@@ -280,6 +283,9 @@ export function toQueryString<Column extends string>(expr: Expr<Column>, clientI
       return parenthesize(concreteExpr.children.map(child => toQueryString(child, clientIdentity)).join(' AND '));
     case 'or':
       return parenthesize(concreteExpr.children.map(child => toQueryString(child, clientIdentity)).join(' OR '));
+    case 'pending':
+      // This should never happen since we resolve and throw at the start
+      throw new Error('Unexpected pending expression in toQueryString');
   }
 }
 
