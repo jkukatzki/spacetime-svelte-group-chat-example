@@ -1,14 +1,33 @@
 import { getContext, hasContext, setContext } from 'svelte';
 import type { DbConnectionImpl, Identity } from 'spacetimedb';
 
+export const CLIENT_IDENTITY_BRAND = Symbol('ClientIdentityBrand');
+
+export type ClientIdentity = Identity & { readonly [typeof CLIENT_IDENTITY_BRAND]: true };
+
+function toClientIdentity(identity: Identity): ClientIdentity {
+  if ((identity as any)[CLIENT_IDENTITY_BRAND]) {
+    return identity as ClientIdentity;
+  }
+
+  Object.defineProperty(identity, CLIENT_IDENTITY_BRAND, {
+    value: true,
+    enumerable: false,
+    configurable: true
+  });
+
+  return identity as ClientIdentity;
+}
+
 export const SPACETIMEDB_CONTEXT_KEY = Symbol('spacetimedb');
 
 export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnectionImpl> {
-  connection: DbConnection;
+  connection: DbConnection & { identity: ClientIdentity | undefined };
   error: Error | undefined = $state();
   
   // Reactive state that will be referenced by the connection's getters/setters
   #identity = $state<Identity | undefined>();
+  #clientIdentity: ClientIdentity | undefined;
   #isActive = $state<boolean>(false);
   
   get identity(): Identity | undefined {
@@ -28,9 +47,21 @@ export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnec
     // This allows direct access to connection.identity and connection.isActive
     // while maintaining reactivity through our $state variables
     Object.defineProperty(connection, 'identity', {
-      get: () => this.#identity,
+      get: () => {
+        const current = this.#identity;
+        if (!current) {
+          return undefined;
+        }
+        this.#clientIdentity = toClientIdentity(current);
+        return this.#clientIdentity;
+      },
       set: (value: Identity | undefined) => {
         this.#identity = value;
+        if (value) {
+          this.#clientIdentity = toClientIdentity(value);
+        } else {
+          this.#clientIdentity = undefined;
+        }
       },
       enumerable: true,
       configurable: true
@@ -45,9 +76,20 @@ export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnec
       configurable: true
     });
     
-    this.connection = connection;
+    this.connection = connection as DbConnection & { identity: ClientIdentity | undefined };
+  }
+
+  hasIdentity(): this is SpacetimeDBContextWithIdentity<DbConnection> {
+    return this.#identity !== undefined;
   }
 }
+
+export type SpacetimeDBContextWithIdentity<
+  DbConnection extends DbConnectionImpl = DbConnectionImpl
+> = SpacetimeDBContext<DbConnection> & {
+  connection: DbConnection & { identity: ClientIdentity };
+  identity: ClientIdentity;
+};
 
 
 /**

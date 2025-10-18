@@ -1,17 +1,16 @@
 <script lang="ts">
 	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row, Styles, Toast, ToastBody, ToastHeader } from "@sveltestrap/sveltestrap";
-	import { STQuery, and, eq, isClient, not, or, where } from "./lib/components/spacetime/svelte_spacetime";
+	import { STQuery, and, eq, not, or, where } from "./lib/components/spacetime/svelte_spacetime";
 	import { DbConnection, GroupChat, GroupChatMembership, Message, User } from "./lib/components/spacetime/module_bindings";
 	import { getSpacetimeContext } from "./lib/components/spacetime/svelte_spacetime/SpacetimeContext.svelte";
 
+    let spacetimeContext = getSpacetimeContext<DbConnection>();
     let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user');
-    let clientUserTable = new STQuery<DbConnection, User>('user', where(isClient('identity'))); 
+    let clientUserTable = new STQuery<DbConnection, User>('user', where(eq('identity', spacetimeContext.connection.identity)));
+    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(eq('identity', spacetimeContext.connection.identity)));
     
     // Derive the specific user from the table's rows
     let clientUser: User | undefined = $derived(clientUserTable.rows[0]);
-    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(isClient('identity')));
-    
-    let spacetimeContext = getSpacetimeContext<DbConnection>();
 
     let selectedGroupChat: GroupChat | undefined = $derived.by(() => {
         if (clientMemberships.rows.length > 0) {
@@ -23,15 +22,18 @@
     let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
     let groupChatMessages = $derived(!selectedGroupChat ? null : new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id))));
     
-    let groupChatMemberships = $derived.by(() => {
-        if (!selectedGroupChat) {
-            return null;
-        } else {
-            return new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
-                where(and(eq('groupchatId', selectedGroupChat.id), not(isClient('identity')))),
-            );
-        }
-    });
+    let groupChatMembers = $derived( selectedGroupChat ?
+            new STQuery<DbConnection, GroupChatMembership>('groupchatMembership',
+                where(
+                    and(
+                        eq('groupchatId', selectedGroupChat.id),
+                        not(eq('identity', spacetimeContext.connection.identity))
+                    )
+                )
+            )
+            :
+            undefined
+    );
 
     // create additional message query to all group chats we are part of,
     // except the currently selected one
@@ -178,7 +180,7 @@
                     {#if selectedGroupChat}
                         <div class="flex-shrink-0">
                             <h4>Group Chat {selectedGroupChat.id}</h4>
-                            {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
+                            {#if clientMemberships.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
                                 {#if groupChatMessages?.rows !== undefined}
                                     <div class="chat-header mb-3">
                                         <small>Total: {groupChatMessages?.rows.length ?? '/'} messages</small>
@@ -186,7 +188,7 @@
                                 {/if}
                             {/if}
                         </div>
-                        {#if clientMemberships?.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
+                        {#if clientMemberships.rows.find(m => m.groupchatId === selectedGroupChat?.id)}
                             {#if groupChatMessages?.rows !== undefined}
                                 <!-- MESSAGES AND MESSAGE INPUT -->
                                 <div class="d-flex flex-column flex-grow-1" style="min-height: 0;">
@@ -245,9 +247,9 @@
                         </CardHeader>
                     </Card>
                     {/if}
-                    {#if groupChatMemberships?.rows && groupChatMemberships.rows.length > 0}
+                    {#if groupChatMembers?.rows && groupChatMembers.rows.length > 0}
                         <h6 class="mt-3">Users in this group chat (excluding yourself):</h6>
-                        {#each groupChatMemberships.rows as membership}
+                        {#each groupChatMembers.rows as membership}
                             <div class="ms-2">
                                 {#if users}
                                     <Badge 

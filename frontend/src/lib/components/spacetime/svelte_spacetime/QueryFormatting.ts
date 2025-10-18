@@ -1,31 +1,77 @@
 import { Identity } from 'spacetimedb';
+import type { ClientIdentity } from './SpacetimeContext.svelte';
 
 export type Value = string | number | boolean | Identity;
 
+export interface PendingResolutionContext {
+  clientIdentity?: Identity;
+}
+
+type PendingExpr<Column extends string> = {
+  type: 'pending';
+  reason: 'missing-value';
+  key?: Column;
+  resolve: (context: PendingResolutionContext) => Expr<Column> | undefined;
+};
+
 export type Expr<Column extends string> =
   | { type: 'eq'; key: Column; value: Value }
-  | { type: 'isClient'; key: Column }
   | { type: 'not'; child: Expr<Column> }
   | { type: 'and'; children: Expr<Column>[] }
-  | { type: 'or'; children: Expr<Column>[] };
+  | { type: 'or'; children: Expr<Column>[] }
+  | PendingExpr<Column>;
 
 // Helper function to convert Identity to hex string with 0x prefix
 function identityToQueryCompliantHexString(identity: Identity): string {
   return '0x' + identity.toHexString();
 }
 
-export const eq = <Column extends string>(
-  key: Column,
-  value: Value
-): Expr<Column> => ({ type: 'eq', key, value });
+type EqInput<ValueType> = undefined extends ValueType
+  ? ClientIdentity extends Exclude<ValueType, undefined>
+    ? ValueType
+    : never
+  : ValueType;
 
-export const isClient = <Column extends string>(
-  key: Column
-): Expr<Column> => ({ type: 'isClient', key });
+export const eq = <
+  Column extends string,
+  InputValue extends Value | ClientIdentity | undefined
+>(
+  key: Column,
+  value: EqInput<InputValue>
+): Expr<Column> => {
+  if (value === undefined) {
+    return {
+      type: 'pending',
+      reason: 'missing-value',
+      key,
+      resolve: ({ clientIdentity }) => {
+        if (!clientIdentity) return undefined;
+        return { type: 'eq', key, value: clientIdentity };
+      }
+    };
+  }
+  return { type: 'eq', key, value: value as Value };
+};
 
 export const not = <Column extends string>(
   child: Expr<Column>
-): Expr<Column> => ({ type: 'not', child });
+): Expr<Column> => {
+  if (child.type === 'pending') {
+    return {
+      type: 'pending',
+      reason: child.reason,
+      key: child.key,
+      resolve: (context) => {
+        const resolvedChild = resolvePendingExpression(child, context);
+        if (!resolvedChild) {
+          return undefined;
+        }
+        return { type: 'not', child: resolvedChild };
+      }
+    };
+  }
+  return { type: 'not', child };
+};
 
 export const and = <Column extends string>(
   ...children: Expr<Column>[]
@@ -67,11 +113,51 @@ function snakeToCamelCase(str: string): string {
   return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
+export function resolvePendingExpression<Column extends string>(
+  expr: Expr<Column>,
+  context: PendingResolutionContext
+): Expr<Column> | undefined {
+  switch (expr.type) {
+    case 'pending':
+      return expr.resolve(context);
+    case 'not': {
+      const resolvedChild = resolvePendingExpression(expr.child, context);
+      if (!resolvedChild) return undefined;
+      return { type: 'not', child: resolvedChild };
+    }
+    case 'and': {
+      const resolvedChildren: Expr<Column>[] = [];
+      for (const child of expr.children) {
+        const resolvedChild = resolvePendingExpression(child, context);
+        if (!resolvedChild) return undefined;
+        resolvedChildren.push(resolvedChild);
+      }
+      return and(...resolvedChildren);
+    }
+    case 'or': {
+      const resolvedChildren: Expr<Column>[] = [];
+      for (const child of expr.children) {
+        const resolvedChild = resolvePendingExpression(child, context);
+        if (!resolvedChild) return undefined;
+        resolvedChildren.push(resolvedChild);
+      }
+      return or(...resolvedChildren);
+    }
+    default:
+      return expr;
+  }
+}
+
 export function evaluate<Column extends string, RowType = any>(
   expr: Expr<Column>,
   row: RowType,
   clientIdentity?: Identity
 ): boolean {
+  const concreteExpr = resolvePendingExpression(expr, { clientIdentity });
+  if (!concreteExpr) {
+    return false;
+  }
+
   const rowRecord = row as Record<string, unknown>;
   
   // Helper to get value from row, trying both the key as-is and converted to camelCase
@@ -90,10 +176,10 @@ export function evaluate<Column extends string, RowType = any>(
     return undefined;
   };
   
-  switch (expr.type) {
+  switch (concreteExpr.type) {
     case 'eq': {
-      const rowValue = getRowValue(expr.key);
-      const exprValue = expr.value;
+      const rowValue = getRowValue(concreteExpr.key);
+      const exprValue = concreteExpr.value;
       
       // Handle Identity comparison
       if (rowValue instanceof Identity && exprValue instanceof Identity) {
@@ -108,30 +194,13 @@ export function evaluate<Column extends string, RowType = any>(
       
       return rowValue === exprValue;
     }
-    case 'isClient': {
-      // isClient expression checks if a column equals the client's identity
-      // If clientIdentity is not available yet, return false (row will be filtered out)
-      if (!clientIdentity) {
-        return false;
-      }
-      
-      const rowValue = getRowValue(expr.key);
-      
-      // Handle Identity comparison
-      if (rowValue instanceof Identity) {
-        return rowValue.isEqual(clientIdentity);
-      }
-      
-      // Handle hex string comparison
-      return rowValue === identityToQueryCompliantHexString(clientIdentity);
-    }
     case 'not': {
-      return !evaluate(expr.child, row, clientIdentity);
+      return !evaluate(concreteExpr.child, row, clientIdentity);
     }
     case 'and':
-      return expr.children.every(child => evaluate(child, row, clientIdentity));
+      return concreteExpr.children.every(child => evaluate(child, row, clientIdentity));
     case 'or':
-      return expr.children.some(child => evaluate(child, row, clientIdentity));
+      return concreteExpr.children.some(child => evaluate(child, row, clientIdentity));
   }
 }
 
@@ -164,85 +233,56 @@ function parenthesize(s: string): string {
 }
 
 export function toQueryString<Column extends string>(expr: Expr<Column>, clientIdentity?: Identity): string {
-  switch (expr.type) {
+  const concreteExpr = resolvePendingExpression(expr, { clientIdentity });
+  if (!concreteExpr) {
+    throw new Error(
+      'Cannot convert pending expression to SQL. Ensure required values are available before building the WHERE clause.'
+    );
+  }
+
+  switch (concreteExpr.type) {
     case 'eq':
-      return `${escapeIdent(expr.key)} = ${formatValue(expr.value)}`;
-    case 'isClient': {
-      // isClient expression generates SQL that checks if column equals the client's identity
-      // If clientIdentity is not available, return a condition that filters out all rows
-      if (!clientIdentity) {
-        console.warn('[isClient toQueryString] No client identity available, generating FALSE condition');
-        return 'FALSE';
-      }
-      return `${escapeIdent(expr.key)} = ${formatValue(clientIdentity)}`;
-    }
+      return `${escapeIdent(concreteExpr.key)} = ${formatValue(concreteExpr.value)}`;
     case 'not': {
       // Optimize NOT expressions for SpacetimeDB compatibility (no NOT operator)
       // Apply De Morgan's Laws to push NOT down to the leaf level
       
-      if (expr.child.type === 'eq') {
+      if (concreteExpr.child.type === 'eq') {
         // NOT (x = y) becomes x != y
-        return `${escapeIdent(expr.child.key)} != ${formatValue(expr.child.value)}`;
+        return `${escapeIdent(concreteExpr.child.key)} != ${formatValue(concreteExpr.child.value)}`;
       }
       
-      if (expr.child.type === 'isClient') {
-        // NOT (isClient(x)) becomes x != clientIdentity
-        if (!clientIdentity) {
-          console.warn('[NOT isClient toQueryString] No client identity available, generating TRUE condition');
-          return 'TRUE';
-        }
-        return `${escapeIdent(expr.child.key)} != ${formatValue(clientIdentity)}`;
-      }
-      
-      if (expr.child.type === 'and') {
+      if (concreteExpr.child.type === 'and') {
         // De Morgan's Law: NOT (A AND B) = (NOT A) OR (NOT B)
-        const negatedChildren = expr.child.children.map(child => 
+        const negatedChildren = concreteExpr.child.children.map(child => 
           toQueryString({ type: 'not', child } as Expr<Column>, clientIdentity)
         );
         return parenthesize(negatedChildren.join(' OR '));
       }
       
-      if (expr.child.type === 'or') {
+      if (concreteExpr.child.type === 'or') {
         // De Morgan's Law: NOT (A OR B) = (NOT A) AND (NOT B)
-        const negatedChildren = expr.child.children.map(child => 
+        const negatedChildren = concreteExpr.child.children.map(child => 
           toQueryString({ type: 'not', child } as Expr<Column>, clientIdentity)
         );
         return parenthesize(negatedChildren.join(' AND '));
       }
       
-      if (expr.child.type === 'not') {
+      if (concreteExpr.child.type === 'not') {
         // Double negation: NOT (NOT x) = x
-        return toQueryString(expr.child.child, clientIdentity);
+        return toQueryString(concreteExpr.child.child, clientIdentity);
       }
       
       // Fallback (shouldn't reach here with proper optimizations)
-      return `NOT (${toQueryString(expr.child, clientIdentity)})`;
+      return `NOT (${toQueryString(concreteExpr.child, clientIdentity)})`;
     }
     case 'and':
-      return parenthesize(expr.children.map(child => toQueryString(child, clientIdentity)).join(' AND '));
+      return parenthesize(concreteExpr.children.map(child => toQueryString(child, clientIdentity)).join(' AND '));
     case 'or':
-      return parenthesize(expr.children.map(child => toQueryString(child, clientIdentity)).join(' OR '));
+      return parenthesize(concreteExpr.children.map(child => toQueryString(child, clientIdentity)).join(' OR '));
   }
 }
 
 export function where<Column extends string>(expr: Expr<Column>): Expr<Column> {
   return expr;
-}
-
-/**
- * Check if an expression contains an isClient expression.
- * This is used to determine if we need to watch for identity changes.
- */
-export function containsIsClient<Column extends string>(expr: Expr<Column>): boolean {
-  switch (expr.type) {
-    case 'isClient':
-      return true;
-    case 'not':
-      return containsIsClient(expr.child);
-    case 'and':
-    case 'or':
-      return expr.children.some(child => containsIsClient(child));
-    case 'eq':
-      return false;
-  }
 }

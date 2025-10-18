@@ -129,7 +129,7 @@ Build complex queries using type-safe helper functions. Value accepts Identity t
 ### Available Operators
 
 ```typescript
-import { where, eq, and, or, not, isClient } from './lib/components/spacetime/svelte_spacetime';
+import { where, eq, and, or, not, type ClientIdentity } from './lib/components/spacetime/svelte_spacetime';
 ```
 
 #### `eq(column, value)` - Equality
@@ -138,20 +138,22 @@ import { where, eq, and, or, not, isClient } from './lib/components/spacetime/sv
 where(eq('groupchatId', 123))
 // SQL: WHERE groupchat_id = 123
 ```
-### NOT INCLUDED IN REACT IMPLEMENTATION
-#### since we cannot query by optional column values, undefined is prohibited as a value, but as identity is only defined once we connect the isClient function is used to automatically start the query once it is defined.
-#### `isClient(column)` - Match Client Identity 
+### Working with Identities
+
+The `eq` helper accepts the branded `ClientIdentity | undefined` that comes from `spacetimeContext.connection.identity`. When the identity is not available yet, `eq` returns a _pending_ expression so the query simply waits until the connection finishes:
 
 ```typescript
-where(isClient('identity'))
-// SQL: WHERE identity = <current_user_identity>
+const identity = spacetimeContext.connection.identity;
+
+const clientUserQuery = new STQuery<DbConnection, User>('user', where(eq('identity', identity)));
+// When `identity` is undefined, the underlying subscription is deferred until it becomes available.
 ```
 
 ### NOT INCLUDED IN REACT IMPLEMENTATION
 #### `not(expression)` - Negation
 
 ```typescript
-where(not(isClient('identity')))
+where(not(eq('identity', identity)))
 // SQL: WHERE identity != <current_user_identity>
 ```
 
@@ -160,7 +162,7 @@ where(not(isClient('identity')))
 ```typescript
 where(and(
   eq('groupchatId', 123),
-  not(isClient('identity'))
+  not(eq('identity', identity))
 ))
 // SQL: WHERE groupchat_id = 123 AND identity != <current_user_identity>
 ```
@@ -180,11 +182,13 @@ where(or(
 ```typescript
 // Get messages from multiple group chats, excluding the current user's messages
 // to display push messages
-let messages = new STQuery<DbConnection, Message>('message',
+const identity = spacetimeContext.connection.identity;
+
+const messagesQuery = new STQuery<DbConnection, Message>('message',
   where(
     and(
       or(...clientMemberships.rows.map(m => eq('groupchatId', m.groupchatId))),
-      not(isClient('sender'))
+      not(eq('sender', identity))
     )
   )
 );

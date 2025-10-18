@@ -2,7 +2,7 @@ import { untrack } from 'svelte';
 import { createSubscriber } from 'svelte/reactivity';
 import { getSpacetimeContext, SpacetimeDBContext } from './SpacetimeContext.svelte';
 import type { DbConnectionImpl, Identity, SubscriptionBuilderImpl } from 'spacetimedb';
-import { evaluate, toQueryString, containsIsClient, type Expr, type Value } from './QueryFormatting';
+import { evaluate, toQueryString, resolvePendingExpression, type Expr, type Value } from './QueryFormatting';
 
 // Re-export query building utilities from React implementation
 export interface UseQueryCallbacks<RowType> {
@@ -155,6 +155,13 @@ export class STQuery<
         $effect(() => {
             // Watch for connection to become active
             const isActive = context.connection.isActive;
+            const currentIdentityHex = context.identity?.toHexString();
+            console.log('[STQuery] subscription effect run', {
+              table: this.tableName,
+              isActive,
+              identity: currentIdentityHex ?? null,
+              hasWhere: Boolean(this.whereClause)
+            });
             
      
               // Clean up existing subscription if any
@@ -170,9 +177,30 @@ export class STQuery<
               // Build SQL query - convert camelCase table name to snake_case for SQL
               const sqlTableName = camelToSnake(this.tableName);
               
+              const whereClause = this.whereClause;
+              const resolvedWhereClause = whereClause
+                ? resolvePendingExpression(whereClause, { clientIdentity: context.identity })
+                : undefined;
+
+              if (whereClause && !resolvedWhereClause) {
+                console.log('[STQuery] pending where clause, deferring subscribe', {
+                  table: this.tableName,
+                  identity: currentIdentityHex ?? null
+                });
+                this.subscription?.unsubscribe();
+                this.subscription = undefined;
+                this.state = 'loading';
+                return;
+              }
+
               const query = `SELECT * FROM ${sqlTableName}` +
-                (this.whereClause ? ` WHERE ${toQueryString(this.whereClause, context.connection.identity)}` : '');
+                (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, context.identity)}` : '');
               
+              console.log('[STQuery] subscribing', {
+                table: this.tableName,
+                query
+              });
+
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
                 this.subscription = context.connection
                   .subscriptionBuilder()
@@ -302,7 +330,7 @@ export class STQuery<
         if (!this.whereClause) {
           return true; // No filter, include all rows
         }
-        return evaluate(this.whereClause, row, context.connection.identity);
+        return evaluate(this.whereClause, row, context.identity);
       });
       
       // Initialize the rows array with filtered cached rows
@@ -311,8 +339,6 @@ export class STQuery<
       // Silently handle cache initialization errors
     }
   }
-
- 
 
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
@@ -341,7 +367,7 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
-      if (this.whereClause && !evaluate(this.whereClause, row, context.connection.identity)) {
+      if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
         return;
       }
       
@@ -352,7 +378,7 @@ export class STQuery<
     };
 
     const onDelete = (ctx: any, row: RowType) => {
-      if (this.whereClause && !evaluate(this.whereClause, row, context.connection.identity)) {
+      if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
         return;
       }
       
@@ -367,7 +393,7 @@ export class STQuery<
     };
 
     const onUpdate = (ctx: any, oldRow: RowType, newRow: RowType) => {
-      const change = classifyMembership(this.whereClause, oldRow, newRow, context.connection.identity);
+      const change = classifyMembership(this.whereClause, oldRow, newRow, context.identity);
       
       if (change === 'enter') {
         this.callbacks?.onInsert?.(newRow);
@@ -489,6 +515,9 @@ function classifyMembership<
 >(where: Expr<Col> | undefined, oldRow: RowType, newRow: RowType, clientIdentity?: Identity): MembershipChange {
   if (!where) {
     return 'stayIn';
+  }
+  if (where.type === 'pending') {
+    return 'stayOut';
   }
 
   const oldIn = evaluate(where, oldRow, clientIdentity);
