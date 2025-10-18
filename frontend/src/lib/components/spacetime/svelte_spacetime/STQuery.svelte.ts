@@ -512,12 +512,18 @@ function classifyMembership<
   if (!where) {
     return 'stayIn';
   }
-  if (where.type === 'pending') {
-    return 'stayOut';
+
+  let effectiveWhere: Expr<Col> = where;
+  if (effectiveWhere.type === 'pending') {
+    const resolved = resolvePendingExpression(effectiveWhere, { clientIdentity });
+    if (!resolved) {
+      return 'stayOut';
+    }
+    effectiveWhere = resolved;
   }
 
-  const oldIn = evaluate(where, oldRow, clientIdentity);
-  const newIn = evaluate(where, newRow, clientIdentity);
+  const oldIn = evaluate(effectiveWhere, oldRow, clientIdentity);
+  const newIn = evaluate(effectiveWhere, newRow, clientIdentity);
 
   if (oldIn && !newIn) {
     return 'leave';

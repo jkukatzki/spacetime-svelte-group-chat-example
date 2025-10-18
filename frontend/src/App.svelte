@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row, Styles, Toast, ToastBody, ToastHeader } from "@sveltestrap/sveltestrap";
+	import { Badge, Button, Card, CardBody, CardHeader, Col, Container, Input, InputGroup, Modal, Row, Styles, Toast, ToastBody, ToastHeader, useColorMode } from "@sveltestrap/sveltestrap";
 	import { STQuery, and, eq, not, or, where } from "./lib/components/spacetime/svelte_spacetime";
 	import { DbConnection, GroupChat, GroupChatMembership, Message, User } from "./lib/components/spacetime/module_bindings";
 	import { getSpacetimeContext } from "./lib/components/spacetime/svelte_spacetime/SpacetimeContext.svelte";
 
+    useColorMode('dark');
     let spacetimeContext = getSpacetimeContext<DbConnection>();
     let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user');
     let clientUserTable = new STQuery<DbConnection, User>('user', where(eq('identity', spacetimeContext.connection.identity)));
@@ -251,7 +252,7 @@
                                 {#if users}
                                     <Badge 
                                         pill={true}
-                                        color={['primary', 'danger', 'success', 'warning'][membership.identity.toHexString().charCodeAt(0) % 4]}
+                                        color={['primary', 'danger', 'success', 'warning'][membership.identity.toHexString().charCodeAt(6) % 4]}
                                         class="me-1">
                                         {users.rows.find(u => u.identity.toHexString() === membership.identity.toHexString())?.name ?? (membership.identity.toHexString().slice(-6))}
                                     </Badge>
@@ -265,7 +266,7 @@
                             {#each users.rows ?? [] as user}
                                 <Badge 
                                     pill={true}
-                                    color={['primary', 'danger', 'success', 'warning'][user.identity.toHexString().charCodeAt(0) % 4]}
+                                    color={['primary', 'danger', 'success', 'warning'][user.identity.toHexString().charCodeAt(6) % 4]}
                                     class="me-1"
                                 >
                                     {user.name ?? user.identity.toHexString().slice(-6)}
