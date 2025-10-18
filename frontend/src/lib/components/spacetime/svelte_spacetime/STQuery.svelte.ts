@@ -98,6 +98,7 @@ export class STQuery<
   private tableName: string;
   private tablePropertyName: string | null = null;
   private whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>;
+  private lastSubscribedQuery: string | undefined;
   private callbacks?: UseQueryCallbacks<RowType>;
   private subscription: SubscriptionHandleImpl<any, any, any> | undefined = undefined;
   private eventListeners: (() => void)[] = [];
@@ -155,24 +156,15 @@ export class STQuery<
         $effect(() => {
             // Watch for connection to become active
             const isActive = context.connection.isActive;
-            const currentIdentityHex = context.identity?.toHexString();
-            console.log('[STQuery] subscription effect run', {
-              table: this.tableName,
-              isActive,
-              identity: currentIdentityHex ?? null,
-              hasWhere: Boolean(this.whereClause)
-            });
-            
-     
-              // Clean up existing subscription if any
+            if (!isActive) {
               if (this.subscription) {
                 this.subscription.unsubscribe();
+                this.subscription = undefined;
               }
-              // Only subscribe if connection is active
-              if (!isActive) {
-                this.subscription?.unsubscribe();
-                return;
-              }
+              this.lastSubscribedQuery = undefined;
+              this.state = 'loading';
+              return;
+            }
               
               // Build SQL query - convert camelCase table name to snake_case for SQL
               const sqlTableName = camelToSnake(this.tableName);
@@ -183,12 +175,11 @@ export class STQuery<
                 : undefined;
 
               if (whereClause && !resolvedWhereClause) {
-                console.log('[STQuery] pending where clause, deferring subscribe', {
-                  table: this.tableName,
-                  identity: currentIdentityHex ?? null
-                });
-                this.subscription?.unsubscribe();
-                this.subscription = undefined;
+                if (this.subscription) {
+                  this.subscription.unsubscribe();
+                  this.subscription = undefined;
+                }
+                this.lastSubscribedQuery = undefined;
                 this.state = 'loading';
                 return;
               }
@@ -196,10 +187,14 @@ export class STQuery<
               const query = `SELECT * FROM ${sqlTableName}` +
                 (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, context.identity)}` : '');
               
-              console.log('[STQuery] subscribing', {
-                table: this.tableName,
-                query
-              });
+              if (this.subscription && this.lastSubscribedQuery === query) {
+                return;
+              }
+
+              if (this.subscription) {
+                this.subscription.unsubscribe();
+                this.subscription = undefined;
+              }
 
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
                 this.subscription = context.connection
@@ -208,6 +203,7 @@ export class STQuery<
                     this.state = 'ready';
                   })
                   .subscribe(query);
+                this.lastSubscribedQuery = query;
               }
            
             
