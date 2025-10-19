@@ -153,64 +153,68 @@ export class STQuery<
     });    
     try {
       const context = getSpacetimeContext();
-        $effect(() => {
-            // Watch for connection to become active
-            const isActive = context.connection.isActive;
-            if (!isActive) {
-              if (this.subscription) {
-                this.subscription.unsubscribe();
-                this.subscription = undefined;
-              }
-              this.lastSubscribedQuery = undefined;
-              this.state = 'loading';
-              return;
-            }
-              
-              // Build SQL query - convert camelCase table name to snake_case for SQL
-              const sqlTableName = camelToSnake(this.tableName);
-              
-              const whereClause = this.whereClause;
-              const resolvedWhereClause = whereClause
-                ? resolvePendingExpression(whereClause, { clientIdentity: context.identity })
-                : undefined;
-
-              if (whereClause && !resolvedWhereClause) {
-                if (this.subscription) {
-                  this.subscription.unsubscribe();
-                  this.subscription = undefined;
-                }
-                this.lastSubscribedQuery = undefined;
-                this.state = 'loading';
-                return;
-              }
-
-              const query = `SELECT * FROM ${sqlTableName}` +
-                (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, context.identity)}` : '');
-              
-              if (this.subscription && this.lastSubscribedQuery === query) {
-                return;
-              }
-
-              if (this.subscription) {
-                this.subscription.unsubscribe();
-                this.subscription = undefined;
-              }
-
-              if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
-                this.subscription = context.connection
-                  .subscriptionBuilder()
-                  .onApplied(() => {
-                    this.state = 'ready';
-                  })
-                  .subscribe(query);
-                this.lastSubscribedQuery = query;
-              }
-           
-            
+      $effect(() => {
+        // Watch for connection to become active
+        const isActive = context.connection.isActive;
+        if (!isActive) {
+          if (this.subscription) {
+            this.subscription.unsubscribe();
+            this.subscription = undefined;
           }
-        );
-        this.setupTableEventListeners(context);
-        return;
+          this.lastSubscribedQuery = undefined;
+          this.state = 'loading';
+          return;
+        }
+
+        // Build SQL query - convert camelCase table name to snake_case for SQL
+        const sqlTableName = camelToSnake(this.tableName);
+
+        const whereClause = this.whereClause;
+        const resolvedWhereClause = whereClause
+          ? resolvePendingExpression(whereClause, { clientIdentity: context.identity })
+          : undefined;
+
+        if (whereClause && !resolvedWhereClause) {
+          if (this.subscription) {
+            this.subscription.unsubscribe();
+            this.subscription = undefined;
+          }
+          this.lastSubscribedQuery = undefined;
+          this.state = 'loading';
+          return;
+        }
+
+        const query = `SELECT * FROM ${sqlTableName}` +
+          (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, context.identity)}` : '');
+
+        if (this.subscription && this.lastSubscribedQuery === query) {
+          return;
+        }
+
+        if (this.subscription) {
+          this.subscription.unsubscribe();
+          this.subscription = undefined;
+        }
+
+        if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
+          this.subscription = context.connection
+            .subscriptionBuilder()
+            .onApplied(() => {
+              this.state = 'ready';
+            })
+            .subscribe(query);
+          this.lastSubscribedQuery = query;
+        }
+
+        if (!this.eventListeners.length) {
+          this.setupTableEventListeners(context);
+        }
+
+        return () => {
+          this.cleanup();
+        };
+      });
+      return;
     } catch {
       throw new Error(
         'Could not find SpacetimeDB client! Did you forget to add a ' +
