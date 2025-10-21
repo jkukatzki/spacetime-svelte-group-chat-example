@@ -20,7 +20,7 @@ A reactive, type-safe integration layer for SpacetimeDB with Svelte 5's runes sy
 [If you just wanna copy the binding code](frontend/src/lib/components/spacetime/svelte_spacetime)
 
 
-The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB connection to all child components. It manages the connection by connecting and disconnecting on component lifecycle events and makes it available through Svelte's context system. The uri, moduleName and token variables are reactive props, meaning the connection is rebuilt if any of these change.
+The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB connection to all child components. It manages the connection by connecting and disconnecting on component lifecycle events and makes it available through Svelte's context system. The uri, moduleName and token variables are reactive props, meaning the connection is rebuilt if any of these change. Please note that Providers currently cannot be nested. Sibling component providers work just fine, just make sure the DbConnection you use in the children makes sense.
 
 #### SpacetimeDBProvider.svelte
 

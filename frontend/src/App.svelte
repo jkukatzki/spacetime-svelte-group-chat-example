@@ -8,10 +8,10 @@
     useColorMode('dark');
     let spacetimeContext = getSpacetimeContext<DbConnection>();
     
-    // Pass context to STQuery to ensure each App instance uses its own provider's context
-    let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user', undefined, spacetimeContext);
-    let clientUserTable = new STQuery<DbConnection, User>('user', where(eq('identity', spacetimeContext.connection.identity)), spacetimeContext);
-    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(eq('identity', spacetimeContext.connection.identity)), spacetimeContext);
+    // STQuery will automatically get the correct context from the nearest parent provider
+    let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user');
+    let clientUserTable = new STQuery<DbConnection, User>('user', where(eq('identity', spacetimeContext.connection.identity)));
+    let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(eq('identity', spacetimeContext.connection.identity)));
     // Derive the specific user by accessing the first row
     let clientUser: User | undefined = $derived(clientUserTable.rows[0]);
 
@@ -22,10 +22,10 @@
         }
     });
     
-    let groupChats = new STQuery<DbConnection, GroupChat>('groupchat', undefined, spacetimeContext);
+    let groupChats = new STQuery<DbConnection, GroupChat>('groupchat');
     let groupChatMessages = $derived(
         !selectedGroupChat ? null :
-        new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)), spacetimeContext)
+        new STQuery<DbConnection, Message>('message', where(eq('groupchatId', selectedGroupChat.id)))
     );
     let groupChatMembers = $derived(
         !selectedGroupChat ? null :
@@ -35,8 +35,7 @@
                     eq('groupchatId', selectedGroupChat.id),
                     not(eq('identity', spacetimeContext.connection.identity))
                 )
-            ),
-            spacetimeContext
+            )
         )
     );
 
@@ -45,8 +44,7 @@
     let clientPushMessages = $derived(
         !clientMemberships.rows.length ? null :
         new STQuery<DbConnection, Message>('message',
-            where(or(...clientMemberships.rows.filter(m => m.groupchatId != selectedGroupChat?.id).map(m => eq('groupchatId', m.groupchatId)))),
-            spacetimeContext
+            where(or(...clientMemberships.rows.filter(m => m.groupchatId != selectedGroupChat?.id).map(m => eq('groupchatId', m.groupchatId))))
         )
     );
     

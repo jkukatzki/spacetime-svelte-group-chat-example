@@ -135,8 +135,7 @@ export class STQuery<
   
   constructor(
     tableName: ValidTableNamesForRowType<DbConnection, RowType> & string,
-    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>,
-    context?: SpacetimeDBContext
+    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>
   ) {
     this.tableName = tableName;
     this.whereClause = whereClause;
@@ -155,8 +154,8 @@ export class STQuery<
       };
     });    
     try {
-      // Use provided context or get from Svelte context
-      const ctx = context || getSpacetimeContext();
+      // Get context from Svelte's context API (nearest parent provider)
+      const ctx = getSpacetimeContext();
         $effect(() => {
             // Watch for connection changes, active state, and identity changes
             const connection = ctx.connection; // Track the connection object itself
