@@ -106,7 +106,6 @@ export class STQuery<
   private rowsToSkipFromCache = 0; // Number of onInsert events to skip (rows already loaded from cache)
   private subscribeRows: () => void;
   private subscribeEvents: () => void;
-  private instanceId = Math.random().toString(36).substring(7); // Debug ID
   
   // Event subscription management
   #eventCallbacks: UseQueryCallbacks<RowType> = {};
@@ -205,7 +204,6 @@ export class STQuery<
               }
 
               if (this.subscription) {
-                console.log(`🔄 [${this.instanceId}] Query changed for ${this.tableName}`);
                 this.subscription.unsubscribe();
                 this.subscription = undefined;
               }
@@ -226,16 +224,13 @@ export class STQuery<
               }
 
               if ('subscriptionBuilder' in ctx.connection && typeof ctx.connection.subscriptionBuilder === 'function') {
-                console.log(`🔗 [${this.instanceId}] Subscribing to ${this.tableName}:`, query);
                 this.subscription = ctx.connection
                   .subscriptionBuilder()
                   .onApplied(() => {
-                    console.log(`📦 [${this.instanceId}] onApplied for ${this.tableName}`);
                     this.state = 'ready';
                     
                     // Clear rows before initializing from cache
                     // This handles cases where onApplied fires multiple times
-                    console.log(`🧹 [${this.instanceId}] Clearing rows, current:`, this.#actualRows.length);
                     this.#actualRows = [];
                     
                     // Initialize from cache after subscription is applied
@@ -244,7 +239,6 @@ export class STQuery<
                       const table = ctx.connection.db[propertyName] as any;
                       if (table) {
                         this.initializeFromCache(ctx, table);
-                        console.log(`📦 [${this.instanceId}] After init, rows:`, this.#actualRows.length);
                       }
                     }
                   })
@@ -346,32 +340,7 @@ export class STQuery<
       return 0; // Return any valid index to indicate it exists
     }
     
-    // Fallback: check if any existing row matches by comparing all fields
-    return this.#actualRows.findIndex(existingRow => {
-      // Compare all keys
-      const targetKeys = Object.keys(targetRow).filter(k => !k.startsWith('__'));
-      const existingKeys = Object.keys(existingRow).filter(k => !k.startsWith('__'));
-      
-      if (targetKeys.length !== existingKeys.length) return false;
-      
-      return targetKeys.every(key => {
-        const targetVal = (targetRow as any)[key];
-        const existingVal = (existingRow as any)[key];
-        
-        // Handle Identity objects with isEqual
-        if (targetVal && typeof targetVal.isEqual === 'function') {
-          return targetVal.isEqual(existingVal);
-        }
-        
-        // Handle Timestamp objects with toDate
-        if (targetVal && typeof targetVal.toDate === 'function' && existingVal && typeof existingVal.toDate === 'function') {
-          return targetVal.toDate().getTime() === existingVal.toDate().getTime();
-        }
-        
-        // Standard equality
-        return targetVal === existingVal;
-      });
-    });
+    return -1; // Not found
   }
 
   /**
@@ -413,7 +382,7 @@ export class STQuery<
       // Initialize the rows array with filtered cached rows
       this.#actualRows = filteredRows;
     } catch (error) {
-      console.error(`❌ [${this.instanceId}] Error initializing from cache:`, error);
+      // Silently handle cache initialization errors
     }
   }
 
@@ -448,21 +417,15 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
-      console.log(`🔔 [${this.instanceId}] onInsert for ${this.tableName}, rows:`, this.#actualRows.length);
-      
       if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
-        console.log(`⏭️ [${this.instanceId}] Filtered out by WHERE`);
         return;
       }
       
       // Check if row already exists (happens when SpacetimeDB fires onInsert for cached rows)
       const existingIndex = this.findRowIndex(row, pkField);
       if (existingIndex !== -1) {
-        console.log(`⏭️ [${this.instanceId}] Already exists at index`, existingIndex);
         return;
       }
-      
-      console.log(`✅ [${this.instanceId}] Adding new row`);
       
       // Tag the row with the current query
       (row as any).__stQueryTag = this.lastSubscribedQuery;
@@ -471,8 +434,6 @@ export class STQuery<
       this.callbacks?.onInsert?.(row);
       this.#eventCallbacks.onInsert?.(row);
       this.#actualRows = [...this.#actualRows, row];
-      
-      console.log(`✅ [${this.instanceId}] New count:`, this.#actualRows.length);
     };
 
     const onDelete = (ctx: any, row: RowType) => {
