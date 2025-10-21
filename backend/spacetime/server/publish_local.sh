@@ -1,1 +1,1 @@
-cd target/wasm32-unknown-unknown/release/ && spacetime publish --delete-data -s local --bin-path spacetime_module.wasm groupchat
+cd target/wasm32-unknown-unknown/release/ && spacetime publish --delete-data -s local --bin-path spacetime_module.wasm groupchat1 && spacetime publish --delete-data -s local --bin-path spacetime_module.wasm groupchat2

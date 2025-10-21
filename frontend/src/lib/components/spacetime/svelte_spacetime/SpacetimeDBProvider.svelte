@@ -63,105 +63,168 @@
   // Svelte's context API automatically isolates this to the component subtree
   setSpacetimeContext(spacetimeContext, SPACETIMEDB_CONTEXT_KEY);
 
-  onMount(() => {
-    // Delay connection building to ensure hydration is complete
-    // This prevents double connections when SSR rehydrates
-    const timeoutId = setTimeout(() => {
-      // Prevent concurrent connection building using global flag
-      if (buildingSet.has(moduleName)) {
-        // Another instance is already building, wait for it
+  // Track the current module name to detect changes
+  let currentModuleName = $state<string | undefined>(undefined);
+  let mounted = $state(false);
+
+  // Helper function to build or get a connection
+  function getOrBuildConnection(moduleName: string) {
+    // Prevent concurrent connection building using global flag
+    if (buildingSet.has(moduleName)) {
+      // Another instance is already building, wait for it
+      return new Promise<any>((resolve) => {
         const checkInterval = setInterval(() => {
           const existingConnection = connections.get(moduleName);
           if (existingConnection && !buildingSet.has(moduleName)) {
             clearInterval(checkInterval);
-            refCounts.set(moduleName, (refCounts.get(moduleName) ?? 0) + 1);
-            spacetimeContext.initializeConnection(existingConnection);
+            resolve(existingConnection);
           }
         }, 10);
+      });
+    }
+
+    let connection = connections.get(moduleName);
+    const isNewConnection = !connection;
+    
+    if (!connection) {
+      // Set building flag to prevent concurrent builds
+      buildingSet.add(moduleName);
+      
+      // Build the connection builder with the provided parameters
+      let builder = dbConnection.builder()
+        .withUri(uri)
+        .withModuleName(moduleName);
+      
+      if (token) {
+        builder = builder.withToken(token);
+      }
+      
+      if (onConnect) {
+        builder = builder.onConnect(onConnect);
+      }
+      
+      if (onConnectError) {
+        builder = builder.onConnectError(onConnectError as any);
+      }
+      
+      if (onDisconnect) {
+        builder = builder.onDisconnect(onDisconnect as any);
+      }
+      
+      connection = builder.build();
+      connections.set(moduleName, connection);
+      refCounts.set(moduleName, 0);
+      buildingSet.delete(moduleName);
+    }
+
+    return Promise.resolve({ connection, isNewConnection });
+  }
+
+  // Helper function to cleanup old connection
+  function cleanupConnection(moduleName: string) {
+    if (!browser) return;
+    
+    const oldRefCount = refCounts.get(moduleName) ?? 1;
+    const currentRefCount = oldRefCount - 1;
+    refCounts.set(moduleName, currentRefCount);
+    console.log(`🔻 Decremented refCount for ${moduleName}: ${oldRefCount} -> ${currentRefCount}`);
+    
+    if (currentRefCount <= 0) {
+      const conn = connections.get(moduleName);
+      if (conn) {
+        console.log(`🔌 Disconnecting ${moduleName}`);
+        conn.disconnect();
+      }
+      connections.delete(moduleName);
+      refCounts.delete(moduleName);
+      console.log(`🗑️ Deleted connection for ${moduleName}`);
+    }
+  }
+
+  // React to prop changes
+  $effect(() => {
+    if (!mounted) return;
+
+    const targetModule = moduleName;
+    console.log(`🔄 Effect running for module: ${targetModule}, current: ${currentModuleName}`);
+
+    // Skip if we're already connected to this module
+    if (currentModuleName === targetModule) {
+      console.log(`⏭️ Already connected to ${targetModule}, skipping`);
+      return;
+    }
+
+    // Cleanup previous connection if module name changed
+    if (currentModuleName && currentModuleName !== targetModule) {
+      console.log(`🧹 Cleaning up old module: ${currentModuleName}`);
+      cleanupConnection(currentModuleName);
+    }
+
+    // Update tracking immediately to prevent race conditions
+    const previousModule = currentModuleName;
+    currentModuleName = targetModule;
+
+    // Build or get connection for new module
+    getOrBuildConnection(targetModule).then(({ connection, isNewConnection }) => {
+      // Only proceed if we haven't switched to a different module in the meantime
+      if (currentModuleName !== targetModule) {
+        console.log(`⚠️ Aborted - switched away from ${targetModule} to ${currentModuleName}`);
         return;
       }
 
-      let connection = connections.get(moduleName);
-      if (!connection) {
-        // Set building flag to prevent concurrent builds
-        buildingSet.add(moduleName);
-        
-        // Build the connection builder with the provided parameters
-        let builder = dbConnection.builder()
-          .withUri(uri)
-          .withModuleName(moduleName);
-        
-        if (token) {
-          builder = builder.withToken(token);
-        }
-        
-        if (onConnect) {
-          builder = builder.onConnect(onConnect);
-        }
-        
-        if (onConnectError) {
-          builder = builder.onConnectError(onConnectError as any);
-        }
-        
-        if (onDisconnect) {
-          builder = builder.onDisconnect(onDisconnect as any);
-        }
-        
-        connection = builder.build();
-        connections.set(moduleName, connection);
-        refCounts.set(moduleName, 0);
-        buildingSet.delete(moduleName);
-      }
-
-      refCounts.set(moduleName, (refCounts.get(moduleName) ?? 0) + 1);
-
-      // Initialize the context with the connection
+      const newRefCount = (refCounts.get(targetModule) ?? 0) + 1;
+      refCounts.set(targetModule, newRefCount);
+      console.log(`✅ Connected to ${targetModule}, isNew: ${isNewConnection}, refCount: ${newRefCount}, isActive: ${connection.isActive}`);
       spacetimeContext.initializeConnection(connection);
       
-      // Set up connection event handlers to update reactive state
-      const clientWithEvents = connection as any;
-      if (clientWithEvents.onConnect) {
-        clientWithEvents.onConnect(() => {
-          const possibleIdentities = [
-            (connection as any).__identity__,
-            (connection as any)._identity,
-            clientWithEvents.__identity__,
-            clientWithEvents._identity
-          ];
-          
-          const actualIdentity = possibleIdentities.find(id => id !== undefined);
-          
-          if (actualIdentity) {
-            spacetimeContext.connection.identity = actualIdentity;
-          }
-          spacetimeContext.connection.isActive = true;
-        });
+      // Only set up connection event handlers for new connections
+      // Otherwise we'd register duplicate handlers on every switch
+      if (isNewConnection) {
+        const clientWithEvents = connection as any;
+        if (clientWithEvents.onConnect) {
+          clientWithEvents.onConnect(() => {
+            const possibleIdentities = [
+              (connection as any).__identity__,
+              (connection as any)._identity,
+              clientWithEvents.__identity__,
+              clientWithEvents._identity
+            ];
+            
+            const actualIdentity = possibleIdentities.find(id => id !== undefined);
+            
+            if (actualIdentity) {
+              spacetimeContext.connection.identity = actualIdentity;
+            }
+            spacetimeContext.connection.isActive = true;
+          });
+        }
+        
+        if (clientWithEvents.onDisconnect) {
+          clientWithEvents.onDisconnect(() => {
+            spacetimeContext.connection.isActive = false;
+          });
+        }
+      } else {
+        // For existing connections, sync the current state
+        spacetimeContext.connection.isActive = (connection as any).isActive ?? false;
+        spacetimeContext.connection.identity = (connection as any).identity;
       }
-      
-      if (clientWithEvents.onDisconnect) {
-        clientWithEvents.onDisconnect(() => {
-          spacetimeContext.connection.isActive = false;
-        });
-      }
+    });
+  });
+
+  onMount(() => {
+    // Delay slightly to ensure hydration is complete
+    const timeoutId = setTimeout(() => {
+      mounted = true;
     }, 0);
 
     return () => clearTimeout(timeoutId);
   });
 
   onDestroy(() => {
-    // Only manage connection lifecycle on the client
-    if (browser && spacetimeContext.connection) {
-      const currentRefCount = (refCounts.get(moduleName) ?? 1) - 1;
-      refCounts.set(moduleName, currentRefCount);
-      
-      if (currentRefCount <= 0) {
-        const conn = connections.get(moduleName);
-        if (conn) {
-          conn.disconnect();
-        }
-        connections.delete(moduleName);
-        refCounts.delete(moduleName);
-      }
+    // Cleanup current connection on unmount
+    if (currentModuleName) {
+      cleanupConnection(currentModuleName);
     }
   });
 </script>

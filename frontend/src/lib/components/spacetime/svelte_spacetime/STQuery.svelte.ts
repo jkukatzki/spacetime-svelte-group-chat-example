@@ -158,11 +158,15 @@ export class STQuery<
       // Use provided context or get from Svelte context
       const ctx = context || getSpacetimeContext();
         $effect(() => {
-            // Watch for connection to become active and identity changes
+            // Watch for connection changes, active state, and identity changes
+            const connection = ctx.connection; // Track the connection object itself
             const isActive = ctx.connection.isActive;
             const currentIdentity = ctx.identity; // Explicitly track identity
             
+            console.log(`📊 STQuery(${this.tableName}) effect - isActive: ${isActive}, identity: ${currentIdentity?.toHexString()}`);
+            
             if (!isActive) {
+              console.log(`⏸️ STQuery(${this.tableName}) - Not active, cleaning up`);
               if (this.subscription) {
                 this.subscription.unsubscribe();
                 this.subscription = undefined;
@@ -199,11 +203,15 @@ export class STQuery<
               const query = `SELECT * FROM ${sqlTableName}` +
                 (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, currentIdentity)}` : '');
               
+              console.log(`🔍 STQuery(${this.tableName}) query: ${query}, lastQuery: ${this.lastSubscribedQuery}`);
+              
               if (this.subscription && this.lastSubscribedQuery === query) {
+                console.log(`✅ STQuery(${this.tableName}) - Already subscribed to this query`);
                 return;
               }
 
               if (this.subscription) {
+                console.log(`🔄 STQuery(${this.tableName}) - Unsubscribing from old query`);
                 this.subscription.unsubscribe();
                 this.subscription = undefined;
               }
