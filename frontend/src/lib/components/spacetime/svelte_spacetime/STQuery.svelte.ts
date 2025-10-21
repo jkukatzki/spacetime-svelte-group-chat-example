@@ -172,6 +172,9 @@ export class STQuery<
               }
               this.lastSubscribedQuery = undefined;
               this.state = 'loading';
+              // Clean up event listeners when not active
+              this.eventListeners.forEach(cleanupFn => cleanupFn());
+              this.eventListeners = [];
               return;
             }
               
@@ -196,6 +199,9 @@ export class STQuery<
                 }
                 this.lastSubscribedQuery = undefined;
                 this.state = 'loading';
+                // Clean up event listeners when where clause can't be resolved
+                this.eventListeners.forEach(cleanupFn => cleanupFn());
+                this.eventListeners = [];
                 return;
               }
 
@@ -214,6 +220,10 @@ export class STQuery<
                 this.subscription.unsubscribe();
                 this.subscription = undefined;
               }
+              
+              // Clean up old event listeners before setting up new ones
+              this.eventListeners.forEach(cleanupFn => cleanupFn());
+              this.eventListeners = [];
 
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
                 console.log('Subscribing to query:', query);
@@ -238,11 +248,13 @@ export class STQuery<
                   .subscribe(query);
                 this.lastSubscribedQuery = query;
               }
+              
+              // Set up event listeners with current identity
+              this.setupTableEventListeners(context);
            
             
           }
         );
-        this.setupTableEventListeners(context);
         return;
     } catch {
       throw new Error(
