@@ -35,7 +35,6 @@
   // This allows multiple connections but prevents duplicates to the same module
   const GLOBAL_CONNECTIONS_SYMBOL = Symbol.for('spacetime:global_connections');
   const GLOBAL_REFCOUNTS_SYMBOL = Symbol.for('spacetime:global_refcounts');
-  const GLOBAL_DISCONNECT_TIMERS_SYMBOL = Symbol.for('spacetime:global_disconnect_timers');
   const GLOBAL_BUILDING_SYMBOL = Symbol.for('spacetime:global_building');
 
   // Use globalThis to ensure true cross-module singleton
@@ -48,16 +47,12 @@
   if (!globalStore[GLOBAL_REFCOUNTS_SYMBOL]) {
     globalStore[GLOBAL_REFCOUNTS_SYMBOL] = new Map();
   }
-  if (!globalStore[GLOBAL_DISCONNECT_TIMERS_SYMBOL]) {
-    globalStore[GLOBAL_DISCONNECT_TIMERS_SYMBOL] = new Map();
-  }
   if (!globalStore[GLOBAL_BUILDING_SYMBOL]) {
     globalStore[GLOBAL_BUILDING_SYMBOL] = new Set();
   }
 
   const connections = globalStore[GLOBAL_CONNECTIONS_SYMBOL]!;
   const refCounts = globalStore[GLOBAL_REFCOUNTS_SYMBOL]!;
-  const disconnectTimers = globalStore[GLOBAL_DISCONNECT_TIMERS_SYMBOL]!;
   const buildingSet = globalStore[GLOBAL_BUILDING_SYMBOL]!;
 
   // Always start with undefined connection to prevent double connections during SSR hydration
@@ -84,12 +79,6 @@
           }
         }, 10);
         return;
-      }
-
-      const existingTimer = disconnectTimers.get(moduleName);
-      if (existingTimer) {
-        clearTimeout(existingTimer);
-        disconnectTimers.delete(moduleName);
       }
 
       let connection = connections.get(moduleName);
@@ -166,16 +155,12 @@
       refCounts.set(moduleName, currentRefCount);
       
       if (currentRefCount <= 0) {
-        const timer = setTimeout(() => {
-          const conn = connections.get(moduleName);
-          if (conn) {
-            conn.disconnect();
-          }
-          connections.delete(moduleName);
-          refCounts.delete(moduleName);
-          disconnectTimers.delete(moduleName);
-        }, 0);
-        disconnectTimers.set(moduleName, timer);
+        const conn = connections.get(moduleName);
+        if (conn) {
+          conn.disconnect();
+        }
+        connections.delete(moduleName);
+        refCounts.delete(moduleName);
       }
     }
   });
