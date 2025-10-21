@@ -154,8 +154,17 @@ export class STQuery<
     try {
       const context = getSpacetimeContext();
         $effect(() => {
-            // Watch for connection to become active
+            // Watch for connection to become active and identity changes
             const isActive = context.connection.isActive;
+            const currentIdentity = context.identity; // Explicitly track identity
+            
+            console.log('STQuery effect running:', {
+              tableName: this.tableName,
+              isActive,
+              currentIdentity,
+              whereClause: this.whereClause
+            });
+            
             if (!isActive) {
               if (this.subscription) {
                 this.subscription.unsubscribe();
@@ -171,8 +180,14 @@ export class STQuery<
               
               const whereClause = this.whereClause;
               const resolvedWhereClause = whereClause
-                ? resolvePendingExpression(whereClause, { clientIdentity: context.identity })
+                ? resolvePendingExpression(whereClause, { clientIdentity: currentIdentity })
                 : undefined;
+
+              console.log('Resolved where clause:', {
+                original: whereClause,
+                resolved: resolvedWhereClause,
+                currentIdentity
+              });
 
               if (whereClause && !resolvedWhereClause) {
                 if (this.subscription) {
@@ -185,22 +200,40 @@ export class STQuery<
               }
 
               const query = `SELECT * FROM ${sqlTableName}` +
-                (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, context.identity)}` : '');
+                (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, currentIdentity)}` : '');
+              
+              console.log('Built query:', query);
               
               if (this.subscription && this.lastSubscribedQuery === query) {
+                console.log('Query unchanged, skipping resubscribe');
                 return;
               }
 
               if (this.subscription) {
+                console.log('Unsubscribing from old query:', this.lastSubscribedQuery);
                 this.subscription.unsubscribe();
                 this.subscription = undefined;
               }
 
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
+                console.log('Subscribing to query:', query);
                 this.subscription = context.connection
                   .subscriptionBuilder()
                   .onApplied(() => {
+                    console.log('Query applied for table:', this.tableName);
                     this.state = 'ready';
+                    
+                    // Re-initialize from cache after subscription is applied
+                    // This ensures we get the data that matches the new identity
+                    const propertyName = this.getTableProperty(context);
+                    if (propertyName && context.connection.db) {
+                      const table = context.connection.db[propertyName] as any;
+                      if (table) {
+                        console.log('Re-initializing from cache for:', this.tableName);
+                        this.initializeFromCache(context, table);
+                        console.log('Rows after cache init:', this.#actualRows.length);
+                      }
+                    }
                   })
                   .subscribe(query);
                 this.lastSubscribedQuery = query;
