@@ -1,6 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment';
-  import { onDestroy, onMount, type Snippet } from 'svelte';
+  import { hasContext, onDestroy, onMount, type Snippet } from 'svelte';
   import type { DbConnectionImpl } from 'spacetimedb';
 	import { SpacetimeDBContext, setSpacetimeContext, SPACETIMEDB_CONTEXT_KEY } from './SpacetimeContext.svelte';
   
@@ -54,6 +54,17 @@
   const connections = globalStore[GLOBAL_CONNECTIONS_SYMBOL]!;
   const refCounts = globalStore[GLOBAL_REFCOUNTS_SYMBOL]!;
   const buildingSet = globalStore[GLOBAL_BUILDING_SYMBOL]!;
+
+  // Check if we're nested inside another SpacetimeDBProvider
+  if (hasContext(SPACETIMEDB_CONTEXT_KEY)) {
+    console.warn(
+      `⚠️ WARNING: SpacetimeDBProvider with moduleName="${moduleName}" is nested inside another SpacetimeDBProvider.\n` +
+      `This can lead to unexpected behavior as child components will use the nearest parent context.\n` +
+      `Consider:\n` +
+      `  1. Placing providers as siblings instead of nested\n` +
+      `  2. Restructuring your component tree to avoid nesting`
+    );
+  }
 
   // Always start with undefined connection to prevent double connections during SSR hydration
   // The real connection will be built in onMount after hydration is complete
