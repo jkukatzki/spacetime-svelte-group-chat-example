@@ -2,7 +2,7 @@
   import { browser } from '$app/environment';
   import { onDestroy, onMount, type Snippet } from 'svelte';
   import type { DbConnectionBuilder, DbConnectionImpl } from 'spacetimedb';
-	import { SpacetimeDBContext, setSpacetimeContext } from './SpacetimeContext.svelte';
+	import { SpacetimeDBContext, setSpacetimeContext, SPACETIMEDB_CONTEXT_KEY } from './SpacetimeContext.svelte';
   
   interface Props<
     DbConnection extends DbConnectionImpl,
@@ -15,71 +15,98 @@
       SubscriptionEventContext
     >;
     children: Snippet;
+    moduleName?: string; // Optional explicit module name for isolation
   }
 
   let { 
     connectionBuilder,
-    children
+    children,
+    moduleName = 'default'
   }: Props<any, any, any> = $props();
 
-  // Global module-level storage for singleton connection management
-  // This persists across component instances and prevents double connections during hydration
-  const GLOBAL_CONNECTION_SYMBOL = Symbol.for('spacetime:global_connection');
-  const GLOBAL_REFCOUNT_SYMBOL = Symbol.for('spacetime:global_refcount');
-  const GLOBAL_DISCONNECT_TIMER_SYMBOL = Symbol.for('spacetime:global_disconnect_timer');
+  // Global storage using module name as key
+  // This allows multiple connections but prevents duplicates to the same module
+  const GLOBAL_CONNECTIONS_SYMBOL = Symbol.for('spacetime:global_connections');
+  const GLOBAL_REFCOUNTS_SYMBOL = Symbol.for('spacetime:global_refcounts');
+  const GLOBAL_DISCONNECT_TIMERS_SYMBOL = Symbol.for('spacetime:global_disconnect_timers');
   const GLOBAL_BUILDING_SYMBOL = Symbol.for('spacetime:global_building');
 
   type ConnectionType = ReturnType<(typeof connectionBuilder)['build']>;
   type GlobalConnectionStore = {
-    [GLOBAL_CONNECTION_SYMBOL]?: ConnectionType;
-    [GLOBAL_REFCOUNT_SYMBOL]?: number;
-    [GLOBAL_DISCONNECT_TIMER_SYMBOL]?: ReturnType<typeof setTimeout>;
-    [GLOBAL_BUILDING_SYMBOL]?: boolean;
+    [GLOBAL_CONNECTIONS_SYMBOL]?: Map<string, ConnectionType>;
+    [GLOBAL_REFCOUNTS_SYMBOL]?: Map<string, number>;
+    [GLOBAL_DISCONNECT_TIMERS_SYMBOL]?: Map<string, ReturnType<typeof setTimeout>>;
+    [GLOBAL_BUILDING_SYMBOL]?: Set<string>;
   };
 
   // Use globalThis to ensure true cross-module singleton
   const globalStore = (globalThis as any) as GlobalConnectionStore;
 
+  // Initialize maps if they don't exist
+  if (!globalStore[GLOBAL_CONNECTIONS_SYMBOL]) {
+    globalStore[GLOBAL_CONNECTIONS_SYMBOL] = new Map();
+  }
+  if (!globalStore[GLOBAL_REFCOUNTS_SYMBOL]) {
+    globalStore[GLOBAL_REFCOUNTS_SYMBOL] = new Map();
+  }
+  if (!globalStore[GLOBAL_DISCONNECT_TIMERS_SYMBOL]) {
+    globalStore[GLOBAL_DISCONNECT_TIMERS_SYMBOL] = new Map();
+  }
+  if (!globalStore[GLOBAL_BUILDING_SYMBOL]) {
+    globalStore[GLOBAL_BUILDING_SYMBOL] = new Set();
+  }
+
+  const connections = globalStore[GLOBAL_CONNECTIONS_SYMBOL]!;
+  const refCounts = globalStore[GLOBAL_REFCOUNTS_SYMBOL]!;
+  const disconnectTimers = globalStore[GLOBAL_DISCONNECT_TIMERS_SYMBOL]!;
+  const buildingSet = globalStore[GLOBAL_BUILDING_SYMBOL]!;
+
   // Always start with undefined connection to prevent double connections during SSR hydration
   // The real connection will be built in onMount after hydration is complete
   const spacetimeContext: SpacetimeDBContext = new SpacetimeDBContext();
+  
+  // Add module identifier for debugging
+  (spacetimeContext as any)._debugModuleName = moduleName;
 
-  setSpacetimeContext(spacetimeContext);
+  // Set context with the default key
+  // Svelte's context API automatically isolates this to the component subtree
+  setSpacetimeContext(spacetimeContext, SPACETIMEDB_CONTEXT_KEY);
 
   onMount(() => {
     // Delay connection building to ensure hydration is complete
     // This prevents double connections when SSR rehydrates
     const timeoutId = setTimeout(() => {
       // Prevent concurrent connection building using global flag
-      if (globalStore[GLOBAL_BUILDING_SYMBOL]) {
+      if (buildingSet.has(moduleName)) {
         // Another instance is already building, wait for it
         const checkInterval = setInterval(() => {
-          const existingConnection = globalStore[GLOBAL_CONNECTION_SYMBOL];
-          if (existingConnection && !globalStore[GLOBAL_BUILDING_SYMBOL]) {
+          const existingConnection = connections.get(moduleName);
+          if (existingConnection && !buildingSet.has(moduleName)) {
             clearInterval(checkInterval);
-            globalStore[GLOBAL_REFCOUNT_SYMBOL] = (globalStore[GLOBAL_REFCOUNT_SYMBOL] ?? 0) + 1;
+            refCounts.set(moduleName, (refCounts.get(moduleName) ?? 0) + 1);
             spacetimeContext.initializeConnection(existingConnection);
           }
         }, 10);
         return;
       }
 
-      if (globalStore[GLOBAL_DISCONNECT_TIMER_SYMBOL]) {
-        clearTimeout(globalStore[GLOBAL_DISCONNECT_TIMER_SYMBOL]);
-        globalStore[GLOBAL_DISCONNECT_TIMER_SYMBOL] = undefined;
+      const existingTimer = disconnectTimers.get(moduleName);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        disconnectTimers.delete(moduleName);
       }
 
-      let connection = globalStore[GLOBAL_CONNECTION_SYMBOL];
+      let connection = connections.get(moduleName);
       if (!connection) {
         // Set building flag to prevent concurrent builds
-        globalStore[GLOBAL_BUILDING_SYMBOL] = true;
+        buildingSet.add(moduleName);
         connection = connectionBuilder.build();
-        globalStore[GLOBAL_CONNECTION_SYMBOL] = connection;
-        globalStore[GLOBAL_REFCOUNT_SYMBOL] = 0;
-        globalStore[GLOBAL_BUILDING_SYMBOL] = false;
+        connections.set(moduleName, connection);
+        refCounts.set(moduleName, 0);
+        buildingSet.delete(moduleName);
       }
 
-      globalStore[GLOBAL_REFCOUNT_SYMBOL] = (globalStore[GLOBAL_REFCOUNT_SYMBOL] ?? 0) + 1;
+      refCounts.set(moduleName, (refCounts.get(moduleName) ?? 0) + 1);
 
       // Initialize the context with the connection
       spacetimeContext.initializeConnection(connection);
@@ -88,12 +115,6 @@
       const clientWithEvents = connection as any;
       if (clientWithEvents.onConnect) {
         clientWithEvents.onConnect(() => {
-          console.log('onConnect fired');
-          console.log('Connection object keys:', Object.keys(connection));
-          console.log('Connection object own property names:', Object.getOwnPropertyNames(connection));
-          
-          // SpacetimeDB might be storing the identity in various ways
-          // Let's check all possible locations
           const possibleIdentities = [
             (connection as any).__identity__,
             (connection as any)._identity,
@@ -101,14 +122,9 @@
             clientWithEvents._identity
           ];
           
-          console.log('Possible identities:', possibleIdentities);
-          
-          // Find the actual identity
           const actualIdentity = possibleIdentities.find(id => id !== undefined);
-          console.log('Using identity:', actualIdentity);
           
           if (actualIdentity) {
-            // Directly update the reactive state
             spacetimeContext.connection.identity = actualIdentity;
           }
           spacetimeContext.connection.isActive = true;
@@ -128,17 +144,20 @@
   onDestroy(() => {
     // Only manage connection lifecycle on the client
     if (browser && spacetimeContext.connection) {
-      globalStore[GLOBAL_REFCOUNT_SYMBOL] = (globalStore[GLOBAL_REFCOUNT_SYMBOL] ?? 1) - 1;
-      if (globalStore[GLOBAL_REFCOUNT_SYMBOL] <= 0) {
-        globalStore[GLOBAL_DISCONNECT_TIMER_SYMBOL] = setTimeout(() => {
-          const conn = globalStore[GLOBAL_CONNECTION_SYMBOL];
+      const currentRefCount = (refCounts.get(moduleName) ?? 1) - 1;
+      refCounts.set(moduleName, currentRefCount);
+      
+      if (currentRefCount <= 0) {
+        const timer = setTimeout(() => {
+          const conn = connections.get(moduleName);
           if (conn) {
             conn.disconnect();
           }
-          delete globalStore[GLOBAL_CONNECTION_SYMBOL];
-          delete globalStore[GLOBAL_REFCOUNT_SYMBOL];
-          delete globalStore[GLOBAL_DISCONNECT_TIMER_SYMBOL];
+          connections.delete(moduleName);
+          refCounts.delete(moduleName);
+          disconnectTimers.delete(moduleName);
         }, 0);
+        disconnectTimers.set(moduleName, timer);
       }
     }
   });

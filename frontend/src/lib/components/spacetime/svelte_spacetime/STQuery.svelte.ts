@@ -106,6 +106,7 @@ export class STQuery<
   private rowsToSkipFromCache = 0; // Number of onInsert events to skip (rows already loaded from cache)
   private subscribeRows: () => void;
   private subscribeEvents: () => void;
+  private instanceId = Math.random().toString(36).substring(7); // Debug ID
   
   // Event subscription management
   #eventCallbacks: UseQueryCallbacks<RowType> = {};
@@ -135,7 +136,8 @@ export class STQuery<
   
   constructor(
     tableName: ValidTableNamesForRowType<DbConnection, RowType> & string,
-    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>
+    whereClause?: Expr<ColumnNameVariants<keyof RowType & string>>,
+    context?: SpacetimeDBContext
   ) {
     this.tableName = tableName;
     this.whereClause = whereClause;
@@ -154,18 +156,12 @@ export class STQuery<
       };
     });    
     try {
-      const context = getSpacetimeContext();
+      // Use provided context or get from Svelte context
+      const ctx = context || getSpacetimeContext();
         $effect(() => {
             // Watch for connection to become active and identity changes
-            const isActive = context.connection.isActive;
-            const currentIdentity = context.identity; // Explicitly track identity
-            
-            console.log('STQuery effect running:', {
-              tableName: this.tableName,
-              isActive,
-              currentIdentity,
-              whereClause: this.whereClause
-            });
+            const isActive = ctx.connection.isActive;
+            const currentIdentity = ctx.identity; // Explicitly track identity
             
             if (!isActive) {
               if (this.subscription) {
@@ -188,12 +184,6 @@ export class STQuery<
                 ? resolvePendingExpression(whereClause, { clientIdentity: currentIdentity })
                 : undefined;
 
-              console.log('Resolved where clause:', {
-                original: whereClause,
-                resolved: resolvedWhereClause,
-                currentIdentity
-              });
-
               if (whereClause && !resolvedWhereClause) {
                 if (this.subscription) {
                   this.subscription.unsubscribe();
@@ -210,15 +200,12 @@ export class STQuery<
               const query = `SELECT * FROM ${sqlTableName}` +
                 (resolvedWhereClause ? ` WHERE ${toQueryString(resolvedWhereClause, currentIdentity)}` : '');
               
-              console.log('Built query:', query);
-              
               if (this.subscription && this.lastSubscribedQuery === query) {
-                console.log('Query unchanged, skipping resubscribe');
                 return;
               }
 
               if (this.subscription) {
-                console.log('Unsubscribing from old query:', this.lastSubscribedQuery);
+                console.log(`🔄 [${this.instanceId}] Query changed for ${this.tableName}`);
                 this.subscription.unsubscribe();
                 this.subscription = undefined;
               }
@@ -227,32 +214,37 @@ export class STQuery<
               this.eventListeners.forEach(cleanupFn => cleanupFn());
               this.eventListeners = [];
               this.hasSetupEventListeners = false; // Reset flag when cleaning up
+              
+              // Clear rows when query changes - they'll be repopulated from cache
+              this.#actualRows = [];
 
               // Set up event listeners BEFORE subscribing
               // This ensures they're ready but won't fire for cached data
               if (!this.hasSetupEventListeners) {
-                console.log('🎧 Setting up event listeners for:', this.tableName);
-                this.setupTableEventListeners(context);
+                this.setupTableEventListeners(ctx);
                 this.hasSetupEventListeners = true;
-                console.log('✅ Event listeners ready for:', this.tableName);
               }
 
-              if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
-                console.log('Subscribing to query:', query);
-                this.subscription = context.connection
+              if ('subscriptionBuilder' in ctx.connection && typeof ctx.connection.subscriptionBuilder === 'function') {
+                console.log(`🔗 [${this.instanceId}] Subscribing to ${this.tableName}:`, query);
+                this.subscription = ctx.connection
                   .subscriptionBuilder()
                   .onApplied(() => {
-                    console.log('🔔 onApplied fired for table:', this.tableName);
+                    console.log(`📦 [${this.instanceId}] onApplied for ${this.tableName}`);
                     this.state = 'ready';
                     
+                    // Clear rows before initializing from cache
+                    // This handles cases where onApplied fires multiple times
+                    console.log(`🧹 [${this.instanceId}] Clearing rows, current:`, this.#actualRows.length);
+                    this.#actualRows = [];
+                    
                     // Initialize from cache after subscription is applied
-                    const propertyName = this.getTableProperty(context);
-                    if (propertyName && context.connection.db) {
-                      const table = context.connection.db[propertyName] as any;
+                    const propertyName = this.getTableProperty(ctx);
+                    if (propertyName && ctx.connection.db) {
+                      const table = ctx.connection.db[propertyName] as any;
                       if (table) {
-                        console.log('📦 Initializing from cache for:', this.tableName);
-                        this.initializeFromCache(context, table);
-                        console.log('📊 Rows after cache init:', this.#actualRows.length);
+                        this.initializeFromCache(ctx, table);
+                        console.log(`📦 [${this.instanceId}] After init, rows:`, this.#actualRows.length);
                       }
                     }
                   })
@@ -324,7 +316,7 @@ export class STQuery<
   }
 
   /**
-   * Find a row in the array by comparing primary key fields or object reference.
+   * Find a row in the array by comparing primary key fields or query tag.
    * Dynamically determines the primary key field from the table.
    */
   private findRowIndex(targetRow: RowType, pkField?: string): number {
@@ -347,8 +339,39 @@ export class STQuery<
       if (index !== -1) return index;
     }
     
-    // Fallback to object reference equality
-    return this.#actualRows.findIndex(r => r === targetRow);
+    // For tables without primary keys, check if row is already tagged with this query
+    const rowTag = (targetRow as any).__stQueryTag;
+    if (rowTag && rowTag === this.lastSubscribedQuery) {
+      // Row is already tagged with this query, it's a duplicate
+      return 0; // Return any valid index to indicate it exists
+    }
+    
+    // Fallback: check if any existing row matches by comparing all fields
+    return this.#actualRows.findIndex(existingRow => {
+      // Compare all keys
+      const targetKeys = Object.keys(targetRow).filter(k => !k.startsWith('__'));
+      const existingKeys = Object.keys(existingRow).filter(k => !k.startsWith('__'));
+      
+      if (targetKeys.length !== existingKeys.length) return false;
+      
+      return targetKeys.every(key => {
+        const targetVal = (targetRow as any)[key];
+        const existingVal = (existingRow as any)[key];
+        
+        // Handle Identity objects with isEqual
+        if (targetVal && typeof targetVal.isEqual === 'function') {
+          return targetVal.isEqual(existingVal);
+        }
+        
+        // Handle Timestamp objects with toDate
+        if (targetVal && typeof targetVal.toDate === 'function' && existingVal && typeof existingVal.toDate === 'function') {
+          return targetVal.toDate().getTime() === existingVal.toDate().getTime();
+        }
+        
+        // Standard equality
+        return targetVal === existingVal;
+      });
+    });
   }
 
   /**
@@ -368,13 +391,11 @@ export class STQuery<
   private initializeFromCache(context: SpacetimeDBContext, table: any) {
     // Access the table cache's iter() method to get all cached rows
     if (!table.tableCache || typeof table.tableCache.iter !== 'function') {
-      console.log('❌ No table cache or iter method available');
       return;
     }
     
     try {
       const cachedRows: RowType[] = table.tableCache.iter();
-      console.log('📦 Cache has rows:', cachedRows.length, 'for table:', this.tableName);
       
       // Filter rows based on the WHERE clause
       const filteredRows = cachedRows.filter(row => {
@@ -384,20 +405,21 @@ export class STQuery<
         return evaluate(this.whereClause, row, context.identity);
       });
       
-      console.log('📦 After filtering:', filteredRows.length, 'rows match WHERE clause');
+      // Tag each row with the current query so we can detect duplicates
+      filteredRows.forEach(row => {
+        (row as any).__stQueryTag = this.lastSubscribedQuery;
+      });
       
       // Initialize the rows array with filtered cached rows
       this.#actualRows = filteredRows;
     } catch (error) {
-      console.log('❌ Error initializing from cache:', error);
-      // Silently handle cache initialization errors
+      console.error(`❌ [${this.instanceId}] Error initializing from cache:`, error);
     }
   }
 
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
     // Always clean up existing listeners first to prevent duplicates
-    console.log('Setting up event listeners for:', this.tableName, 'Current listeners:', this.eventListeners.length);
     this.eventListeners.forEach(cleanupFn => cleanupFn());
     this.eventListeners = [];
     
@@ -426,28 +448,31 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
-      console.log('onInsert fired for:', this.tableName, row);
+      console.log(`🔔 [${this.instanceId}] onInsert for ${this.tableName}, rows:`, this.#actualRows.length);
       
       if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
-        console.log('Row filtered out by where clause');
+        console.log(`⏭️ [${this.instanceId}] Filtered out by WHERE`);
         return;
       }
       
       // Check if row already exists (happens when SpacetimeDB fires onInsert for cached rows)
       const existingIndex = this.findRowIndex(row, pkField);
       if (existingIndex !== -1) {
-        console.log('⏭️ Skipping onInsert - row already exists at index', existingIndex);
+        console.log(`⏭️ [${this.instanceId}] Already exists at index`, existingIndex);
         return;
       }
       
-      console.log('✅ Adding row, current count:', this.#actualRows.length);
+      console.log(`✅ [${this.instanceId}] Adding new row`);
+      
+      // Tag the row with the current query
+      (row as any).__stQueryTag = this.lastSubscribedQuery;
       
       // Call both constructor callbacks and event callbacks
       this.callbacks?.onInsert?.(row);
       this.#eventCallbacks.onInsert?.(row);
       this.#actualRows = [...this.#actualRows, row];
       
-      console.log('✅ Row added, new count:', this.#actualRows.length);
+      console.log(`✅ [${this.instanceId}] New count:`, this.#actualRows.length);
     };
 
     const onDelete = (ctx: any, row: RowType) => {
@@ -495,7 +520,6 @@ export class STQuery<
     };
 
     // Register event listeners
-    console.log('Registering event listeners for:', this.tableName);
     table.onInsert(onInsert);
     if (hasOnDelete) {
       table.onDelete(onDelete);
@@ -506,7 +530,6 @@ export class STQuery<
 
     // Store cleanup functions
     this.eventListeners.push(() => {
-      console.log('Cleaning up event listeners for:', this.tableName);
       if ('removeOnInsert' in table) {
         table.removeOnInsert(onInsert);
         if (hasOnDelete && 'removeOnDelete' in table) {
@@ -517,8 +540,6 @@ export class STQuery<
         }
       }
     });
-    
-    console.log('Event listeners registered, total listeners:', this.eventListeners.length);
   }
 
   /**

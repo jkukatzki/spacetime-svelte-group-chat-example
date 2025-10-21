@@ -28,6 +28,9 @@ export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnec
   #isActive = $state<boolean>(false);
   #connection: DbConnection | undefined;
   
+  // Store the context key for this instance
+  contextKey: symbol = SPACETIMEDB_CONTEXT_KEY;
+  
   get identity(): Identity | undefined {
     return this.#identity;
   }
@@ -36,8 +39,11 @@ export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnec
     return this.#isActive;
   }
 
-  constructor(connection?: DbConnection) {
+  constructor(connection?: DbConnection, contextKey?: symbol) {
     this.connection = this.#createPlaceholderConnection();
+    if (contextKey) {
+      this.contextKey = contextKey;
+    }
 
     if (connection) {
       this.initializeConnection(connection);
@@ -89,15 +95,12 @@ export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnec
         return this.#clientIdentity;
       },
       set: (value: Identity | undefined) => {
-        console.log('Identity setter called with:', value);
         this.#identity = value;
         if (value) {
           this.#clientIdentity = toClientIdentity(value);
         } else {
           this.#clientIdentity = undefined;
         }
-        console.log('After setting, this.#identity:', this.#identity);
-        console.log('After setting, this.identity getter:', this.identity);
       },
       enumerable: true,
       configurable: true
@@ -106,7 +109,6 @@ export class SpacetimeDBContext<DbConnection extends DbConnectionImpl = DbConnec
     Object.defineProperty(connection, 'isActive', {
       get: () => this.#isActive,
       set: (value: boolean) => {
-        console.log('isActive setter called with:', value);
         this.#isActive = value;
       },
       enumerable: true,
@@ -184,18 +186,24 @@ export type SpacetimeDBContextWithIdentity<
  * Get the full SpacetimeDB context including connection state and errors.
  * Similar to how useThrelte provides the full ThrelteContext.
  * 
+ * This retrieves the context stored by the nearest SpacetimeDBProvider ancestor.
+ * The context is retrieved using the contextKey stored in the context itself.
+ * 
+ * @param contextKey - Optional custom context key. If not provided, uses default key.
  * @returns The complete SpacetimeDB context
  */
-export function getSpacetimeContext<DbConnection extends DbConnectionImpl = DbConnectionImpl>(): SpacetimeDBContext<DbConnection> {
-  if (!hasContext(SPACETIMEDB_CONTEXT_KEY)) {
+export function getSpacetimeContext<DbConnection extends DbConnectionImpl = DbConnectionImpl>(contextKey: symbol = SPACETIMEDB_CONTEXT_KEY): SpacetimeDBContext<DbConnection> {
+  if (!hasContext(contextKey)) {
     throw new Error(
       'getSpacetimeContext must be used within a SpacetimeDBProvider component. Did you forget to add a `SpacetimeDBProvider` to your component tree?'
     );
   }
   
-  return getContext<SpacetimeDBContext<DbConnection>>(SPACETIMEDB_CONTEXT_KEY);
+  const context = getContext<SpacetimeDBContext<DbConnection>>(contextKey);
+  
+  return context;
 }
 
-export function setSpacetimeContext<DbConnection extends DbConnectionImpl = DbConnectionImpl>(context: SpacetimeDBContext<DbConnection>) {
-  setContext<SpacetimeDBContext<DbConnection>>(SPACETIMEDB_CONTEXT_KEY, context);
+export function setSpacetimeContext<DbConnection extends DbConnectionImpl = DbConnectionImpl>(context: SpacetimeDBContext<DbConnection>, contextKey: symbol = SPACETIMEDB_CONTEXT_KEY) {
+  setContext<SpacetimeDBContext<DbConnection>>(contextKey, context);
 }
