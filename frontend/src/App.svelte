@@ -10,7 +10,6 @@
     let users: STQuery<DbConnection, User> = new STQuery<DbConnection, User>('user');
     let clientUserTable = new STQuery<DbConnection, User>('user', where(eq('identity', spacetimeContext.connection.identity)));
     let clientMemberships = new STQuery<DbConnection, GroupChatMembership>('groupchatMembership', where(eq('identity', spacetimeContext.connection.identity)));
-    
     // Derive the specific user from the table's rows
     let clientUser: User | undefined = $derived(clientUserTable.rows[0]);
 

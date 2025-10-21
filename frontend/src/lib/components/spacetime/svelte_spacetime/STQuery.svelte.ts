@@ -102,6 +102,8 @@ export class STQuery<
   private callbacks?: UseQueryCallbacks<RowType>;
   private subscription: SubscriptionHandleImpl<any, any, any> | undefined = undefined;
   private eventListeners: (() => void)[] = [];
+  private hasSetupEventListeners = false; // Track if we've already set up event listeners
+  private rowsToSkipFromCache = 0; // Number of onInsert events to skip (rows already loaded from cache)
   private subscribeRows: () => void;
   private subscribeEvents: () => void;
   
@@ -224,33 +226,39 @@ export class STQuery<
               // Clean up old event listeners before setting up new ones
               this.eventListeners.forEach(cleanupFn => cleanupFn());
               this.eventListeners = [];
+              this.hasSetupEventListeners = false; // Reset flag when cleaning up
+
+              // Set up event listeners BEFORE subscribing
+              // This ensures they're ready but won't fire for cached data
+              if (!this.hasSetupEventListeners) {
+                console.log('🎧 Setting up event listeners for:', this.tableName);
+                this.setupTableEventListeners(context);
+                this.hasSetupEventListeners = true;
+                console.log('✅ Event listeners ready for:', this.tableName);
+              }
 
               if ('subscriptionBuilder' in context.connection && typeof context.connection.subscriptionBuilder === 'function') {
                 console.log('Subscribing to query:', query);
                 this.subscription = context.connection
                   .subscriptionBuilder()
                   .onApplied(() => {
-                    console.log('Query applied for table:', this.tableName);
+                    console.log('🔔 onApplied fired for table:', this.tableName);
                     this.state = 'ready';
                     
-                    // Re-initialize from cache after subscription is applied
-                    // This ensures we get the data that matches the new identity
+                    // Initialize from cache after subscription is applied
                     const propertyName = this.getTableProperty(context);
                     if (propertyName && context.connection.db) {
                       const table = context.connection.db[propertyName] as any;
                       if (table) {
-                        console.log('Re-initializing from cache for:', this.tableName);
+                        console.log('📦 Initializing from cache for:', this.tableName);
                         this.initializeFromCache(context, table);
-                        console.log('Rows after cache init:', this.#actualRows.length);
+                        console.log('📊 Rows after cache init:', this.#actualRows.length);
                       }
                     }
                   })
                   .subscribe(query);
                 this.lastSubscribedQuery = query;
               }
-              
-              // Set up event listeners with current identity
-              this.setupTableEventListeners(context);
            
             
           }
@@ -360,11 +368,13 @@ export class STQuery<
   private initializeFromCache(context: SpacetimeDBContext, table: any) {
     // Access the table cache's iter() method to get all cached rows
     if (!table.tableCache || typeof table.tableCache.iter !== 'function') {
+      console.log('❌ No table cache or iter method available');
       return;
     }
     
     try {
       const cachedRows: RowType[] = table.tableCache.iter();
+      console.log('📦 Cache has rows:', cachedRows.length, 'for table:', this.tableName);
       
       // Filter rows based on the WHERE clause
       const filteredRows = cachedRows.filter(row => {
@@ -374,15 +384,23 @@ export class STQuery<
         return evaluate(this.whereClause, row, context.identity);
       });
       
+      console.log('📦 After filtering:', filteredRows.length, 'rows match WHERE clause');
+      
       // Initialize the rows array with filtered cached rows
       this.#actualRows = filteredRows;
     } catch (error) {
+      console.log('❌ Error initializing from cache:', error);
       // Silently handle cache initialization errors
     }
   }
 
 
   private setupTableEventListeners(context: SpacetimeDBContext) {
+    // Always clean up existing listeners first to prevent duplicates
+    console.log('Setting up event listeners for:', this.tableName, 'Current listeners:', this.eventListeners.length);
+    this.eventListeners.forEach(cleanupFn => cleanupFn());
+    this.eventListeners = [];
+    
     if (!context.connection?.db) {
       return;
     }
@@ -397,8 +415,8 @@ export class STQuery<
       return;
     }
     
-    // Initialize rows from the cache
-    this.initializeFromCache(context, table);
+    // Don't initialize from cache here - it will be done in onApplied callback
+    // This prevents double-adding rows when the subscription is applied
     
     // Extract the primary key field name from the table's metadata
     const pkField: string | undefined = table.tableCache?.tableTypeInfo?.primaryKey;
@@ -408,14 +426,28 @@ export class STQuery<
     const hasOnDelete = 'onDelete' in table && typeof table.onDelete === 'function';
     
     const onInsert = (ctx: any, row: RowType) => {
+      console.log('onInsert fired for:', this.tableName, row);
+      
       if (this.whereClause && !evaluate(this.whereClause, row, context.identity)) {
+        console.log('Row filtered out by where clause');
         return;
       }
+      
+      // Check if row already exists (happens when SpacetimeDB fires onInsert for cached rows)
+      const existingIndex = this.findRowIndex(row, pkField);
+      if (existingIndex !== -1) {
+        console.log('⏭️ Skipping onInsert - row already exists at index', existingIndex);
+        return;
+      }
+      
+      console.log('✅ Adding row, current count:', this.#actualRows.length);
       
       // Call both constructor callbacks and event callbacks
       this.callbacks?.onInsert?.(row);
       this.#eventCallbacks.onInsert?.(row);
       this.#actualRows = [...this.#actualRows, row];
+      
+      console.log('✅ Row added, new count:', this.#actualRows.length);
     };
 
     const onDelete = (ctx: any, row: RowType) => {
@@ -463,6 +495,7 @@ export class STQuery<
     };
 
     // Register event listeners
+    console.log('Registering event listeners for:', this.tableName);
     table.onInsert(onInsert);
     if (hasOnDelete) {
       table.onDelete(onDelete);
@@ -473,6 +506,7 @@ export class STQuery<
 
     // Store cleanup functions
     this.eventListeners.push(() => {
+      console.log('Cleaning up event listeners for:', this.tableName);
       if ('removeOnInsert' in table) {
         table.removeOnInsert(onInsert);
         if (hasOnDelete && 'removeOnDelete' in table) {
@@ -483,10 +517,12 @@ export class STQuery<
         }
       }
     });
+    
+    console.log('Event listeners registered, total listeners:', this.eventListeners.length);
   }
 
   /**
-   * Clean up all subscriptions and event listeners.
+   * Clean up subscriptions and event listeners.
    * Called automatically when effects are destroyed, or manually when needed.
    */
   cleanup() {
@@ -497,6 +533,7 @@ export class STQuery<
     
     this.eventListeners.forEach(cleanupFn => cleanupFn());
     this.eventListeners = [];
+    this.hasSetupEventListeners = false; // Reset flag so listeners can be set up again if needed
     
     this.state = 'loading';
     this.rows = [];
