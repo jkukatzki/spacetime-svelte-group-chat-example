@@ -20,7 +20,7 @@ A reactive, type-safe integration layer for SpacetimeDB with Svelte 5's runes sy
 [If you just wanna copy the binding code](frontend/src/lib/components/spacetime/svelte_spacetime)
 
 
-The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB connection to all child components. It manages the connection by connecting and disconnecting on component lifecycle events and makes it available through Svelte's context system. This example shows the moduleName being a reactive state. Be aware that all the 
+The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB connection to all child components. It manages the connection by connecting and disconnecting on component lifecycle events and makes it available through Svelte's context system. The uri, moduleName and token variables are reactive props, meaning the connection is rebuilt if any of these change.
 
 #### SpacetimeDBProvider.svelte
 
@@ -29,17 +29,17 @@ The `SpacetimeDBProvider` component wraps your app and provides the SpacetimeDB 
 	import SpacetimeDBProvider from "$lib/components/spacetime/svelte_spacetime/SpacetimeDBProvider.svelte";
 	import App from "../App.svelte";
 	import { DbConnection } from '$lib/components/spacetime/module_bindings';
-  let selectedModule = $state('groupchat1');
+  let moduleName = $state('groupchat1');
+  let uri = $state('ws://localhost:3000');
+
 </script>
 
-<select bind:value={selectedModule}>
-  <option value="groupchat1">Module: groupchat1</option>
-  <option value="groupchat2">Module: groupchat2</option>
-</select>
+<input bind:value={moduleName}/>
+<input bind:value={uri}>
 
 <SpacetimeDBProvider 
 	dbConnection={DbConnection}
-	uri="ws://localhost:3000"
+	{uri}
 	moduleName={selectedModule}
 >
 		<App/>

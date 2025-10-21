@@ -63,8 +63,10 @@
   // Svelte's context API automatically isolates this to the component subtree
   setSpacetimeContext(spacetimeContext, SPACETIMEDB_CONTEXT_KEY);
 
-  // Track the current module name to detect changes
+  // Track the current connection parameters to detect changes
   let currentModuleName = $state<string | undefined>(undefined);
+  let currentUri = $state<string | undefined>(undefined);
+  let currentToken = $state<string | undefined>(undefined);
   let mounted = $state(false);
 
   // Helper function to build or get a connection
@@ -146,23 +148,32 @@
     if (!mounted) return;
 
     const targetModule = moduleName;
-    console.log(`🔄 Effect running for module: ${targetModule}, current: ${currentModuleName}`);
+    const targetUri = typeof uri === 'string' ? uri : uri.toString();
+    const targetToken = token;
+    
+    console.log(`🔄 Effect running for module: ${targetModule}, uri: ${targetUri}, token: ${targetToken}`);
 
-    // Skip if we're already connected to this module
-    if (currentModuleName === targetModule) {
-      console.log(`⏭️ Already connected to ${targetModule}, skipping`);
+    // Check if anything changed
+    const moduleChanged = currentModuleName !== targetModule;
+    const uriChanged = currentUri !== targetUri;
+    const tokenChanged = currentToken !== targetToken;
+    
+    if (!moduleChanged && !uriChanged && !tokenChanged) {
+      console.log(`⏭️ No changes detected, skipping`);
       return;
     }
 
-    // Cleanup previous connection if module name changed
-    if (currentModuleName && currentModuleName !== targetModule) {
-      console.log(`🧹 Cleaning up old module: ${currentModuleName}`);
+    // If URI or token changed but module name is the same, we need to disconnect and reconnect
+    // If module name changed, we need to cleanup the old module
+    if (currentModuleName && (moduleChanged || uriChanged || tokenChanged)) {
+      console.log(`🧹 Cleaning up old connection: module=${currentModuleName}, moduleChanged=${moduleChanged}, uriChanged=${uriChanged}, tokenChanged=${tokenChanged}`);
       cleanupConnection(currentModuleName);
     }
 
     // Update tracking immediately to prevent race conditions
-    const previousModule = currentModuleName;
     currentModuleName = targetModule;
+    currentUri = targetUri;
+    currentToken = targetToken;
 
     // Build or get connection for new module
     getOrBuildConnection(targetModule).then(({ connection, isNewConnection }) => {
