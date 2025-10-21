@@ -1,28 +1,35 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { onDestroy, onMount, type Snippet } from 'svelte';
-  import type { DbConnectionBuilder, DbConnectionImpl } from 'spacetimedb';
+  import type { DbConnectionImpl } from 'spacetimedb';
 	import { SpacetimeDBContext, setSpacetimeContext, SPACETIMEDB_CONTEXT_KEY } from './SpacetimeContext.svelte';
   
   interface Props<
     DbConnection extends DbConnectionImpl,
-    ErrorContext,
-    SubscriptionEventContext,
   > {
-    connectionBuilder: DbConnectionBuilder<
-      DbConnection,
-      ErrorContext,
-      SubscriptionEventContext
-    >;
+    // The DbConnection class with static builder() method
+    dbConnection: { builder: () => any };
+    // Connection parameters
+    uri: string | URL;
+    moduleName: string;
+    token?: string;
+    // Optional callbacks
+    onConnect?: (connection: DbConnection, identity: any, token: string) => void;
+    onConnectError?: (error: Error) => void;
+    onDisconnect?: (error?: Error) => void;
     children: Snippet;
-    moduleName?: string; // Optional explicit module name for isolation
   }
 
   let { 
-    connectionBuilder,
+    dbConnection,
+    uri,
+    moduleName,
+    token,
+    onConnect,
+    onConnectError,
+    onDisconnect,
     children,
-    moduleName = 'default'
-  }: Props<any, any, any> = $props();
+  }: Props<any> = $props();
 
   // Global storage using module name as key
   // This allows multiple connections but prevents duplicates to the same module
@@ -31,16 +38,8 @@
   const GLOBAL_DISCONNECT_TIMERS_SYMBOL = Symbol.for('spacetime:global_disconnect_timers');
   const GLOBAL_BUILDING_SYMBOL = Symbol.for('spacetime:global_building');
 
-  type ConnectionType = ReturnType<(typeof connectionBuilder)['build']>;
-  type GlobalConnectionStore = {
-    [GLOBAL_CONNECTIONS_SYMBOL]?: Map<string, ConnectionType>;
-    [GLOBAL_REFCOUNTS_SYMBOL]?: Map<string, number>;
-    [GLOBAL_DISCONNECT_TIMERS_SYMBOL]?: Map<string, ReturnType<typeof setTimeout>>;
-    [GLOBAL_BUILDING_SYMBOL]?: Set<string>;
-  };
-
   // Use globalThis to ensure true cross-module singleton
-  const globalStore = (globalThis as any) as GlobalConnectionStore;
+  const globalStore = globalThis as any;
 
   // Initialize maps if they don't exist
   if (!globalStore[GLOBAL_CONNECTIONS_SYMBOL]) {
@@ -64,9 +63,6 @@
   // Always start with undefined connection to prevent double connections during SSR hydration
   // The real connection will be built in onMount after hydration is complete
   const spacetimeContext: SpacetimeDBContext = new SpacetimeDBContext();
-  
-  // Add module identifier for debugging
-  (spacetimeContext as any)._debugModuleName = moduleName;
 
   // Set context with the default key
   // Svelte's context API automatically isolates this to the component subtree
@@ -100,7 +96,29 @@
       if (!connection) {
         // Set building flag to prevent concurrent builds
         buildingSet.add(moduleName);
-        connection = connectionBuilder.build();
+        
+        // Build the connection builder with the provided parameters
+        let builder = dbConnection.builder()
+          .withUri(uri)
+          .withModuleName(moduleName);
+        
+        if (token) {
+          builder = builder.withToken(token);
+        }
+        
+        if (onConnect) {
+          builder = builder.onConnect(onConnect);
+        }
+        
+        if (onConnectError) {
+          builder = builder.onConnectError(onConnectError as any);
+        }
+        
+        if (onDisconnect) {
+          builder = builder.onDisconnect(onDisconnect as any);
+        }
+        
+        connection = builder.build();
         connections.set(moduleName, connection);
         refCounts.set(moduleName, 0);
         buildingSet.delete(moduleName);
